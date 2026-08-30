@@ -3,7 +3,7 @@ use std::time::Instant;
 use crate::fft::Fft;
 
 const BASS_CUT_OFF_HZ: f64 = 100.0;
-const FFT_INTERVAL_NS: u64 = 1_000_000_000 / 60;
+const FFT_INTERVAL_NS: u64 = 0;
 
 pub struct Dsp {
     pub number_of_bars: usize,

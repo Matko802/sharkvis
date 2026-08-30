@@ -149,36 +149,31 @@ fn default_sink_monitor() -> Option<String> {
                             .default_sink_name
                             .as_ref()
                             .map(|s| s.to_string());
+                        if qq.default_sink.is_none() {
+                            qq.done = true;
+                        }
                     }));
                 } else if sink_op.is_none() {
-                    let sink_name = {
-                        let qq = q.borrow();
-                        qq.default_sink.clone()
-                    };
-                    match sink_name {
-                        Some(name) => {
-                            let q3 = q.clone();
-                            sink_op = Some(ctx.introspect().get_sink_info_by_name(
-                                &name,
-                                move |r: ListResult<&SinkInfo>| {
-                                    let mut qq = q3.borrow_mut();
-                                    match r {
-                                        ListResult::Item(info) => {
-                                            qq.name = info
-                                                .monitor_source_name
-                                                .as_ref()
-                                                .map(|s| s.to_string())
-                                                .unwrap_or_default();
-                                            qq.done = true;
-                                        }
-                                        _ => qq.done = true,
+                    let sink_name = q.borrow().default_sink.clone();
+                    if let Some(name) = sink_name {
+                        let q3 = q.clone();
+                        sink_op = Some(ctx.introspect().get_sink_info_by_name(
+                            &name,
+                            move |r: ListResult<&SinkInfo>| {
+                                let mut qq = q3.borrow_mut();
+                                match r {
+                                    ListResult::Item(info) => {
+                                        qq.name = info
+                                            .monitor_source_name
+                                            .as_ref()
+                                            .map(|s| s.to_string())
+                                            .unwrap_or_default();
+                                        qq.done = true;
                                     }
-                                },
-                            ));
-                        }
-                        None => {
-                            q.borrow_mut().done = true;
-                        }
+                                    _ => qq.done = true,
+                                }
+                            },
+                        ));
                     }
                 }
             }
@@ -256,32 +251,29 @@ fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
             break;
         }
         for f in 0..frames {
-            loop {
-                let head = shared.head.load(Ordering::Relaxed);
-                let tail = shared.tail.load(Ordering::Acquire);
-                if head - tail >= shared.capacity {
-                    continue;
-                }
-                let i = head & shared.mask;
-                let l = i16::from_le_bytes([
-                    raw[f * nbytes_per_frame],
-                    raw[f * nbytes_per_frame + 1],
-                ]) as f64
-                    / 32768.0;
-                let r = if nch >= 2 {
-                    i16::from_le_bytes([
-                        raw[f * nbytes_per_frame + 2],
-                        raw[f * nbytes_per_frame + 3],
-                    ]) as f64
-                        / 32768.0
-                } else {
-                    l
-                };
-                shared.ring[2 * i].store(l.to_bits(), Ordering::Relaxed);
-                shared.ring[2 * i + 1].store(r.to_bits(), Ordering::Relaxed);
-                shared.head.store(head + 1, Ordering::Release);
-                break;
+            let head = shared.head.load(Ordering::Relaxed);
+            let tail = shared.tail.load(Ordering::Acquire);
+            if head - tail >= shared.capacity {
+                continue;
             }
+            let i = head & shared.mask;
+            let l = i16::from_le_bytes([
+                raw[f * nbytes_per_frame],
+                raw[f * nbytes_per_frame + 1],
+            ]) as f64
+                / 32768.0;
+            let r = if nch >= 2 {
+                i16::from_le_bytes([
+                    raw[f * nbytes_per_frame + 2],
+                    raw[f * nbytes_per_frame + 3],
+                ]) as f64
+                    / 32768.0
+            } else {
+                l
+            };
+            shared.ring[2 * i].store(l.to_bits(), Ordering::Relaxed);
+            shared.ring[2 * i + 1].store(r.to_bits(), Ordering::Relaxed);
+            shared.head.store(head + 1, Ordering::Release);
         }
     }
 }
