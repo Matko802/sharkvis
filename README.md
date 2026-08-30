@@ -10,9 +10,6 @@ Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-vi
 
 </div>
 
-The original C implementation is preserved, fully buildable, under
-[`c-backup/`](c-backup/).
-
 ## Features
 
 - PulseAudio / PipeWire support
