@@ -13,13 +13,13 @@
 
       sharkvis =
         { pkgs }:
-        pkgs.stdenv.mkDerivation {
+        pkgs.rustPlatform.buildRustPackage {
           pname = "sharkvis";
-          version = "0.0.1";
-          src = ./.;
+          version = "0.1.0";
+          src = pkgs.lib.cleanSource ./.;
+          cargoLock.lockFile = ./Cargo.lock;
           nativeBuildInputs = [ pkgs.pkg-config ];
           buildInputs = [ pkgs.libpulseaudio ];
-          makeFlags = [ "PREFIX=$(out)" ];
           meta = {
             mainProgram = "sharkvis";
             description = "Terminal audio spectrum analyzer";
@@ -43,7 +43,12 @@
 
       devShells = forAllSystems (pkgs:
         pkgs.mkShell {
-          buildInputs = [ pkgs.gcc pkgs.pkg-config pkgs.libpulseaudio ];
+          buildInputs = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.pkg-config
+            pkgs.libpulseaudio
+          ];
         });
     };
 }

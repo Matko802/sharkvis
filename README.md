@@ -4,11 +4,14 @@
 
 # sharkvis
 
-Linux only audio visualizer made in C
+Linux only audio visualizer, now in Rust
 
 Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer)</sub>
 
 </div>
+
+The original C implementation is preserved, fully buildable, under
+[`c-backup/`](c-backup/).
 
 ## Features
 
@@ -20,7 +23,7 @@ Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-vi
 
 ## Building
 
-`make` required for building
+Rust (cargo) and the libpulse-simple development headers are required.
 
 ```sh
 git clone https://github.com/Matko802/sharkvis.git
@@ -30,7 +33,14 @@ make
 sudo make install
 ```
 
-Prefer not to touch your system? On NixOS or any distro with Nix installed:
+On NixOS or any distro with Nix, prefer the flake (no system packages needed):
+
+```sh
+nix develop   # drop into a shell with cargo, pkg-config and libpulse
+make          # build inside the dev shell
+```
+
+Prefer not to touch your system at all?
 
 ```sh
 nix run github:Matko802/sharkvis

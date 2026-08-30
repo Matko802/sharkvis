@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+frag="${CCWRAP_FRAG:-}"
+cc="$(command -v gcc)"
+case " $* " in
+*" -c "*) compile=1 ;;
+*) compile=0 ;;
+esac
+if [ -n "$frag" ] && [ "$compile" -eq 1 ]; then
+    args=""
+    last=""
+    for a in "$@"; do
+        esc=$(printf '%s' "$a" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        args="$args $esc"
+        last="$a"
+    done
+    lesc=$(printf '%s' "$last" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    printf '{ "directory": "%s", "command": "%s%s", "file": "%s" },\n' \
+        "$PWD" "$cc" "$args" "$lesc" >> "$frag"
+fi
+exec "$cc" "$@"

@@ -3,3 +3,4 @@
 *.o
 /result
 /compile_commands.json
+/target
