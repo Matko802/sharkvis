@@ -50,7 +50,7 @@ const LABELS: [&str; S_COUNT] = [
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
-const MODES: [&str; 3] = ["bars", "wave", "lissajous"];
+const MODES: [&str; 3] = ["bars", "wave", "oscilloscope"];
 
 fn now_ms() -> i64 {
     static REF: OnceLock<Instant> = OnceLock::new();

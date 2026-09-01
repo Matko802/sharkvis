@@ -278,7 +278,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             b"visualizer" => match key.as_slice() {
                 b"mode" => {
                     let v = val.as_slice();
-                    if v == b"bars" || v == b"wave" || v == b"lissajous" {
+                    if v == b"bars" || v == b"wave" || v == b"oscilloscope" || v == b"lissajous" {
                         cfg.mode = String::from_utf8_lossy(v).into_owned();
                     }
                 }

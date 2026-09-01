@@ -1,10 +1,12 @@
 use std::sync::OnceLock;
 
+use crate::term::term_winsize_px;
+
 pub const LOGO_PNG: &[u8] = include_bytes!("../Logo/paperust.png");
 const MAX_IMG_PIXELS: usize = 4096 * 4096;
 const MAX_INFLATE_BYTES: usize = 32 * 1024 * 1024;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LogoKind {
     Kitty,
     Blocks,
@@ -57,13 +59,39 @@ fn append(out: &mut Vec<u8>, cap: usize, bytes: &[u8]) {
     out.extend_from_slice(&bytes[..take]);
 }
 
-fn box_cells(img: &Image, pw: usize, avail: usize) -> (usize, usize) {
-    let a = img.h as f64 / img.w as f64;
+static TRUECOLOR: OnceLock<bool> = OnceLock::new();
+
+fn truecolor_ok() -> bool {
+    *TRUECOLOR.get_or_init(|| {
+        let ct = std::env::var("COLORTERM").unwrap_or_default().to_ascii_lowercase();
+        ct.contains("truecolor") || ct.contains("24bit")
+    })
+}
+
+/// Aspect ratio of a terminal cell (height / width). Uses TIOCGWINSZ pixel
+/// dimensions when the terminal reports them, otherwise falls back to the
+/// common ~2:1 cell shape.
+fn cell_aspect(rows: u32, cols: u32) -> f64 {
+    let (xpx, ypx) = term_winsize_px(1);
+    if xpx > 0 && ypx > 0 && rows > 0 && cols > 0 {
+        let cell_w = xpx as f64 / cols as f64;
+        let cell_h = ypx as f64 / rows as f64;
+        if cell_w > 0.0 && cell_h > 0.0 {
+            return cell_h / cell_w;
+        }
+    }
+    2.0
+}
+
+fn box_cells(img: &Image, pw: usize, avail: usize, aspect: f64) -> (usize, usize) {
+    // Columns needed per row of cells so the rendered block keeps the source
+    // image proportion once real cell shapes (aspect) are accounted for.
+    let target = img.w as f64 / img.h as f64 * aspect;
     let mut r = avail;
-    let mut c = (r as f64 / a).round() as usize;
+    let mut c = (r as f64 * target).round() as usize;
     if c > pw {
         c = pw;
-        r = (c as f64 * a).round() as usize;
+        r = (c as f64 / target).round() as usize;
     }
     if r < 1 {
         r = 1;
@@ -86,7 +114,8 @@ pub fn draw(out: &mut Vec<u8>, cap: usize, rows: u32, cols: u32, pw: usize) {
         return;
     }
     let avail = avail.min(12);
-    let (c, r) = box_cells(img, pw, avail);
+    let aspect = cell_aspect(rows, cols);
+    let (c, r) = box_cells(img, pw, avail, aspect);
     let y0 = rows as usize - r + 1;
     if y0 + r - 1 > rows as usize || c > cols as usize {
         return;
@@ -131,6 +160,7 @@ fn draw_blocks(out: &mut Vec<u8>, cap: usize, img: &Image, c: usize, r: usize, y
     if src_w < 1 || src_h < 1 {
         return;
     }
+    let tc = truecolor_ok();
     let mut esc = Vec::with_capacity(64);
     for i in 0..r {
         esc.clear();
@@ -147,20 +177,41 @@ fn draw_blocks(out: &mut Vec<u8>, cap: usize, img: &Image, c: usize, r: usize, y
                 append(out, cap, b"\x1b[0m ");
                 continue;
             }
-            let cell = if fa > 0 && ba > 0 {
-                format!(
-                    "\x1b[38;2;{};{};{};48;2;{};{};{}m\u{2580}",
-                    fr, fg, fb, br, bg, bb
-                )
-            } else if fa > 0 {
-                format!("\x1b[38;2;{};{};{}m\u{2580}", fr, fg, fb)
-            } else {
-                format!("\x1b[48;2;{};{};{}m\u{2580}", br, bg, bb)
-            };
-            append(out, cap, cell.as_bytes());
+            append(out, cap, b"\x1b[0m");
+            if fa > 0 {
+                append_fg(out, cap, fr, fg, fb, tc);
+            }
+            if ba > 0 {
+                append_bg(out, cap, br, bg, bb, tc);
+            }
+            append(out, cap, "\u{2580}".as_bytes());
         }
     }
     append(out, cap, b"\x1b[0m");
+}
+
+fn append_fg(out: &mut Vec<u8>, cap: usize, r: u8, g: u8, b: u8, tc: bool) {
+    if tc {
+        append(out, cap, format!("\x1b[38;2;{};{};{}m", r, g, b).as_bytes());
+    } else {
+        append(out, cap, b"\x1b[38;5;");
+        append(out, cap, format!("{}", to_256(r, g, b)).as_bytes());
+        append(out, cap, b"m");
+    }
+}
+
+fn append_bg(out: &mut Vec<u8>, cap: usize, r: u8, g: u8, b: u8, tc: bool) {
+    if tc {
+        append(out, cap, format!("\x1b[48;2;{};{};{}m", r, g, b).as_bytes());
+    } else {
+        append(out, cap, b"\x1b[48;5;");
+        append(out, cap, format!("{}", to_256(r, g, b)).as_bytes());
+        append(out, cap, b"m");
+    }
+}
+
+fn to_256(r: u8, g: u8, b: u8) -> u8 {
+    16 + 36 * ((r as u32 * 6) / 256) as u8 + 6 * ((g as u32 * 6) / 256) as u8 + ((b as u32 * 6) / 256) as u8
 }
 
 fn avg_region(img: &Image, x: usize, y: usize, w: usize, h: usize) -> (u8, u8, u8, u64) {
@@ -776,5 +827,55 @@ mod tests {
         let mut b64 = Vec::new();
         base64(src, &mut b64);
         assert_eq!(&b64[..], b"aGVsbG8gd29ybGQ=");
+    }
+
+    // Force the non-image (Blocks) path with 256-color output and check the
+    // rendered cell geometry stays proportionate and uses safe escapes.
+    #[test]
+    fn blocks_mode_layout() {
+        for (k, _) in std::env::vars_os() {
+            if k == "SHARKVIS_FORCE_KITTY"
+                || k == "KITTY_WINDOW_ID"
+                || k == "TERM_PROGRAM"
+                || k == "WEZTERM_PANE"
+                || k == "WEZTERM_EXECUTABLE"
+                || k == "GHOSTTY_RESOURCES_DIR"
+            {
+                std::env::remove_var(k);
+            }
+        }
+        std::env::set_var("COLORTERM", "");
+        std::env::set_var("TERM", "xterm");
+        assert_eq!(detect(), LogoKind::Blocks, "test must run the Blocks path");
+        assert!(!truecolor_ok(), "no truecolor expected in test");
+
+        let mut out = Vec::new();
+        draw(&mut out, 1 << 20, 40, 100, 28);
+
+        let s = String::from_utf8_lossy(&out);
+        assert!(s.contains("38;5;"), "Blocks mode should use 256-color escapes");
+        assert!(!s.contains("38;2;"), "Blocks mode must not emit raw truecolor SGR");
+        assert!(s.contains('\u{2580}'), "Blocks mode should draw half-block cells");
+
+        // With a square logo and cell aspect 2.0, 12 rows fit and should take
+        // ~24 columns -> bottom-aligned block, not a squashed one.
+        for i in 29..40 {
+            assert!(
+                s.contains(&format!("\x1b[{};1H", i)),
+                "logo row {} not drawn",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn box_cells_aspect() {
+        let img = Image { w: 100, h: 100, rgba: vec![0; 100 * 100 * 4] };
+        // Square cells: square image -> square block.
+        assert_eq!(box_cells(&img, 80, 12, 1.0), (12, 12));
+        // Tall cells (aspect 2.0): need 2 columns per row to stay square.
+        assert_eq!(box_cells(&img, 80, 12, 2.0), (24, 12));
+        // Wide image on a ~2:1 cell stays within the panel width.
+        assert_eq!(box_cells(&img, 28, 12, 2.0), (24, 12));
     }
 }

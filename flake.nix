@@ -28,13 +28,24 @@
         };
     in
     {
-      # Fully static musl build: no glibc, no libpulse linked in. PulseAudio
-      # client libs are loaded at runtime with dlopen on Windows-of-things that
-      # provide them (pulseaudio, pipewire-pulse).
-      packages = forAllSystems (pkgs: {
-        default = sharkvis { pkgs = pkgs.pkgsStatic; };
-        sharkvis = sharkvis { pkgs = pkgs.pkgsStatic; };
-      });
+      # Fully static musl build: no glibc, no libpulse. Capture uses the
+      # PulseAudio native protocol implemented directly in Rust (src/pulse.rs).
+      packages = forAllSystems (pkgs:
+        let
+          staticBuild = sharkvis { pkgs = pkgs.pkgsStatic; };
+        in
+        {
+          # pkgsStatic appends "-static-<target>" to the derivation name; wrap
+          # the binary in a native derivation so the store name is just "sharkvis".
+          default = pkgs.runCommand "sharkvis" { } ''
+            mkdir -p $out/bin
+            install -Dm755 ${staticBuild}/bin/sharkvis $out/bin/sharkvis
+          '';
+          sharkvis = pkgs.runCommand "sharkvis" { } ''
+            mkdir -p $out/bin
+            install -Dm755 ${staticBuild}/bin/sharkvis $out/bin/sharkvis
+          '';
+        });
 
       overlays.default = final: _prev: {
         sharkvis = sharkvis { pkgs = final.pkgsStatic; };

@@ -4,7 +4,7 @@ use crate::config::DEFAULT_GLYPHS;
 pub enum RenderMode {
     Bars,
     Wave,
-    Lissajous,
+    Oscilloscope,
 }
 
 pub struct Renderer {
@@ -34,15 +34,15 @@ pub struct Renderer {
     wave_pos: usize,
     wave_filled: usize,
     wave_spc: usize,
-    lj_l: Vec<f64>,
-    lj_r: Vec<f64>,
-    lj_cap: usize,
-    lj_pos: usize,
-    lj_filled: usize,
-    lj_spc: usize,
-    lj_win: usize,
+    osc_l: Vec<f64>,
+    osc_r: Vec<f64>,
+    osc_cap: usize,
+    osc_pos: usize,
+    osc_filled: usize,
+    osc_spc: usize,
+    osc_win: usize,
     stereo_in: bool,
-    lj_glow: Vec<u8>,
+    osc_glow: Vec<u8>,
     sc_yrow: Vec<i64>,
     sc_lo: Vec<i64>,
     sc_hi: Vec<i64>,
@@ -251,15 +251,15 @@ impl Renderer {
             wave_pos: 0,
             wave_filled: 0,
             wave_spc: 1,
-            lj_l: Vec::new(),
-            lj_r: Vec::new(),
-            lj_cap: 0,
-            lj_pos: 0,
-            lj_filled: 0,
-            lj_spc: 1,
-            lj_win: 0,
+            osc_l: Vec::new(),
+            osc_r: Vec::new(),
+            osc_cap: 0,
+            osc_pos: 0,
+            osc_filled: 0,
+            osc_spc: 1,
+            osc_win: 0,
             stereo_in: false,
-            lj_glow: vec![0; rows * cols],
+            osc_glow: vec![0; rows * cols],
             sc_yrow: Vec::new(),
             sc_lo: Vec::new(),
             sc_hi: Vec::new(),
@@ -274,7 +274,7 @@ impl Renderer {
         self.num_bars = num_bars;
         self.barstr_bw = 0;
         self.prev = vec![0xFF; rows * cols];
-        self.lj_glow = vec![0; rows * cols];
+        self.osc_glow = vec![0; rows * cols];
         self.row_col = vec![Vec::new(); rows];
         self.rowbuf = vec![0; cols];
         self.db_x0 = 0;
@@ -289,7 +289,7 @@ impl Renderer {
         }
         self.x_off = x_off;
         self.prev = vec![0xFF; self.rows * self.cols];
-        self.lj_glow = vec![0; self.rows * self.cols];
+        self.osc_glow = vec![0; self.rows * self.cols];
         self.rowbuf = vec![0; self.cols];
         self.db_x0 = 0;
         self.db_y0 = 0;
@@ -303,16 +303,16 @@ impl Renderer {
         }
         self.mode = m;
         self.clear();
-        if m == RenderMode::Lissajous {
-            self.lj_glow.fill(0);
+        if m == RenderMode::Oscilloscope {
+            self.osc_glow.fill(0);
         }
     }
 
     pub fn mode_parse(name: &str) -> RenderMode {
         if name == "wave" {
             RenderMode::Wave
-        } else if name == "lissajous" {
-            RenderMode::Lissajous
+        } else if name == "oscilloscope" || name == "lissajous" {
+            RenderMode::Oscilloscope
         } else {
             RenderMode::Bars
         }
@@ -332,36 +332,36 @@ impl Renderer {
         if spc < 1 {
             spc = 1;
         }
-        let mut lj_spc = sample_rate as usize / 800;
-        if lj_spc < 1 {
-            lj_spc = 1;
+        let mut osc_spc = sample_rate as usize / 800;
+        if osc_spc < 1 {
+            osc_spc = 1;
         }
-        let mut lj_win = sample_rate as usize / 20;
-        if lj_win < 256 {
-            lj_win = 256;
+        let mut osc_win = sample_rate as usize / 20;
+        if osc_win < 256 {
+            osc_win = 256;
         }
         if self.wave_cap == cap {
             self.wave_spc = spc;
-            self.lj_spc = lj_spc;
-            self.lj_win = lj_win;
+            self.osc_spc = osc_spc;
+            self.osc_win = osc_win;
             return;
         }
         self.wave_buf = vec![0.0; cap];
-        self.lj_l = vec![0.0; cap];
-        self.lj_r = vec![0.0; cap];
+        self.osc_l = vec![0.0; cap];
+        self.osc_r = vec![0.0; cap];
         self.wave_cap = cap;
         self.wave_pos = 0;
         self.wave_filled = 0;
         self.wave_spc = spc;
-        self.lj_cap = cap;
-        self.lj_pos = 0;
-        self.lj_filled = 0;
-        self.lj_spc = lj_spc;
-        self.lj_win = lj_win;
+        self.osc_cap = cap;
+        self.osc_pos = 0;
+        self.osc_filled = 0;
+        self.osc_spc = osc_spc;
+        self.osc_win = osc_win;
     }
 
     pub fn feed(&mut self, left: Option<&[f64]>, right: Option<&[f64]>, n: usize) {
-        if self.mode != RenderMode::Wave && self.mode != RenderMode::Lissajous {
+        if self.mode != RenderMode::Wave && self.mode != RenderMode::Oscilloscope {
             return;
         }
         if self.wave_cap == 0 || n == 0 {
@@ -375,8 +375,8 @@ impl Renderer {
                 v = (v + r[i]) * 0.5;
             }
             self.wave_buf[self.wave_pos] = v;
-            self.lj_l[self.lj_pos] = left[i];
-            self.lj_r[self.lj_pos] = match right {
+            self.osc_l[self.osc_pos] = left[i];
+            self.osc_r[self.osc_pos] = match right {
                 Some(r) => r[i],
                 None => left[i],
             };
@@ -384,9 +384,9 @@ impl Renderer {
             if self.wave_filled < self.wave_cap {
                 self.wave_filled += 1;
             }
-            self.lj_pos = (self.lj_pos + 1) % self.lj_cap;
-            if self.lj_filled < self.lj_cap {
-                self.lj_filled += 1;
+            self.osc_pos = (self.osc_pos + 1) % self.osc_cap;
+            if self.osc_filled < self.osc_cap {
+                self.osc_filled += 1;
             }
         }
     }
@@ -713,7 +713,7 @@ impl Renderer {
 
     fn set_beam(&mut self, x: i64, y: i64) {
         if x >= 0 && y >= 0 && (x as usize) < self.cols && (y as usize) < self.rows {
-            self.lj_glow[y as usize * self.cols + x as usize] = 255;
+            self.osc_glow[y as usize * self.cols + x as usize] = 255;
         }
     }
 
@@ -740,25 +740,25 @@ impl Renderer {
         }
     }
 
-    fn draw_lissajous(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
-        if self.lj_cap == 0 || self.rows < 3 || region_w < 4 {
+    fn draw_oscilloscope(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
+        if self.osc_cap == 0 || self.rows < 3 || region_w < 4 {
             return;
         }
         let rows = self.rows;
         let cols = self.cols;
 
-        self.lj_glow.fill(0);
+        self.osc_glow.fill(0);
 
         let mut cx0 = cols;
         let mut cy0 = rows;
         let mut cx1 = 0usize;
         let mut cy1 = 0usize;
-        let mut n = self.lj_filled;
-        if n > self.lj_win {
-            n = self.lj_win;
+        let mut n = self.osc_filled;
+        if n > self.osc_win {
+            n = self.osc_win;
         }
         if n > 1 {
-            let delay = if self.lj_spc == 0 { 1 } else { self.lj_spc };
+            let delay = if self.osc_spc == 0 { 1 } else { self.osc_spc };
             let cx = x_start as f64 + (region_w - 1) as f64 * 0.5;
             let cy = (rows - 1) as f64 * 0.5;
             let sxc = (region_w - 1) as f64 * 0.5;
@@ -766,12 +766,12 @@ impl Renderer {
             let mut px = -1i64;
             let mut py = -1i64;
             for i in 0..n {
-                let idx = (self.lj_pos + self.lj_cap - n + i) % self.lj_cap;
-                let mut l = self.lj_l[idx];
-                let mut r = self.lj_r[idx];
+                let idx = (self.osc_pos + self.osc_cap - n + i) % self.osc_cap;
+                let mut l = self.osc_l[idx];
+                let mut r = self.osc_r[idx];
                 if !self.stereo_in {
-                    let idx2 = (idx + self.lj_cap - delay) % self.lj_cap;
-                    r = self.lj_l[idx2];
+                    let idx2 = (idx + self.osc_cap - delay) % self.osc_cap;
+                    r = self.osc_l[idx2];
                 }
                 if l < -1.0 {
                     l = -1.0;
@@ -826,7 +826,7 @@ impl Renderer {
         if ux1 >= ux0 && uy1 >= uy0 {
             for y in uy0..=uy1 {
                 for x in ux0..=ux1 {
-                    self.rowbuf[x - ux0] = if self.lj_glow[y * cols + x] != 0 { 8 } else { 0 };
+                    self.rowbuf[x - ux0] = if self.osc_glow[y * cols + x] != 0 { 8 } else { 0 };
                 }
                 let row = self.rowbuf[..(ux1 - ux0 + 1)].to_vec();
                 self.emit_row(y, ux0, ux1 - ux0 + 1, &row, &mut st, out);
@@ -847,7 +847,7 @@ impl Renderer {
         let mut o = Out { buf: out, cap };
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
-            RenderMode::Lissajous => self.draw_lissajous(self.x_off, region, &mut o),
+            RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
             RenderMode::Bars => {
                 self.draw_bars(values, None, self.num_bars, self.num_bars, self.x_off, region, &mut o)
             }
@@ -870,7 +870,7 @@ impl Renderer {
         let mut o = Out { buf: out, cap };
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
-            RenderMode::Lissajous => self.draw_lissajous(self.x_off, region, &mut o),
+            RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),
