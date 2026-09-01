@@ -25,6 +25,7 @@ pub struct Renderer {
     db_x1: usize,
     db_y1: usize,
     row_col: Vec<Vec<u8>>,
+    grad_sig: (u32, u32, bool, usize),
     barstr: [Vec<u8>; 9],
     spacestr: Vec<u8>,
     barstr_bw: usize,
@@ -187,6 +188,11 @@ impl Renderer {
     }
 
     fn row_colors(&mut self) {
+        let sig = (self.grad_lo, self.grad_hi, self.color_256, self.rows);
+        if self.grad_sig == sig {
+            return;
+        }
+        self.grad_sig = sig;
         for y in 0..self.rows {
             self.row_col[y] = self.bar_color((self.rows - 1 - y) as u32, self.rows as u32);
         }
@@ -242,6 +248,7 @@ impl Renderer {
             db_x1: if cols > 0 { cols - 1 } else { 0 },
             db_y1: if rows > 0 { rows - 1 } else { 0 },
             row_col: vec![Vec::new(); rows],
+            grad_sig: (0, 0, false, 0),
             barstr: Default::default(),
             spacestr: Vec::new(),
             barstr_bw: 0,
@@ -276,6 +283,7 @@ impl Renderer {
         self.prev = vec![0xFF; rows * cols];
         self.osc_glow = vec![0; rows * cols];
         self.row_col = vec![Vec::new(); rows];
+        self.grad_sig = (0, 0, false, 0);
         self.rowbuf = vec![0; cols];
         self.db_x0 = 0;
         self.db_y0 = 0;
