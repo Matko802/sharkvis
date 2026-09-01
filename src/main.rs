@@ -8,7 +8,6 @@ mod audio;
 mod config;
 mod dsp;
 mod fft;
-mod logo;
 mod pulse;
 mod render;
 mod settings;
@@ -420,7 +419,6 @@ fn main() {
         if in_settings {
             if is_k(key, &cp[..clen], b'g') || is_k(key, &cp[..clen], b'G') || key == KEY_ESC {
                 in_settings = false;
-                logo::delete_now();
                 {
                     let stdout = std::io::stdout();
                     let mut so = stdout.lock();
@@ -598,7 +596,6 @@ fn main() {
             out.clear();
             if in_settings {
                 st.draw(&cfg, &mut out, OUT_CAP, rows, panel_width_for(cols));
-                logo::draw(&mut out, OUT_CAP, rows, cols, panel_width_for(cols));
             }
             if cfg.channels > 1 {
                 rnd.draw_stereo(&heights[0], &heights[1], pcl, &mut out, OUT_CAP);
@@ -650,9 +647,7 @@ fn main() {
     {
         let stdout = std::io::stdout();
         let mut so = stdout.lock();
-        let mut tail = Vec::with_capacity(CLEAR_ESC.len() + logo::delete_seq().len() + 8);
-        let del = logo::delete_seq();
-        tail.extend_from_slice(&del);
+        let mut tail = Vec::with_capacity(CLEAR_ESC.len() + 8);
         tail.extend_from_slice(b"\x1b[?25h\x1b[0m");
         tail.extend_from_slice(CLEAR_ESC);
         let _ = so.write_all(&tail);
