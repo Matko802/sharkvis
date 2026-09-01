@@ -7,8 +7,6 @@ license = "MIT"
 
 [dependencies]
 libc = "0.2"
-libpulse-binding = "2.30"
-libpulse-simple-binding = "2.29"
 
 [profile.release]
 opt-level = 3

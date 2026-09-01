@@ -18,8 +18,6 @@
           version = "0.1.0";
           src = pkgs.lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.libpulseaudio ];
           meta = {
             mainProgram = "sharkvis";
             description = "Terminal audio spectrum analyzer";
@@ -28,27 +26,23 @@
             platforms = pkgs.lib.platforms.linux;
           };
         };
-
-      overlay = final: _prev: {
-        sharkvis = sharkvis { pkgs = final; };
-      };
     in
     {
+      # Fully static musl build: no glibc, no libpulse linked in. PulseAudio
+      # client libs are loaded at runtime with dlopen on Windows-of-things that
+      # provide them (pulseaudio, pipewire-pulse).
       packages = forAllSystems (pkgs: {
-        default = sharkvis { inherit pkgs; };
-        sharkvis = sharkvis { inherit pkgs; };
+        default = sharkvis { pkgs = pkgs.pkgsStatic; };
+        sharkvis = sharkvis { pkgs = pkgs.pkgsStatic; };
       });
 
-      overlays.default = overlay;
+      overlays.default = final: _prev: {
+        sharkvis = sharkvis { pkgs = final.pkgsStatic; };
+      };
 
       devShells = forAllSystems (pkgs:
         pkgs.mkShell {
-          buildInputs = [
-            pkgs.cargo
-            pkgs.rustc
-            pkgs.pkg-config
-            pkgs.libpulseaudio
-          ];
+          buildInputs = [ pkgs.pkgsMusl.cargo pkgs.pkgsMusl.rustc ];
         });
     };
 }

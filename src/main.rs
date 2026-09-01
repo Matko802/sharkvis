@@ -9,6 +9,7 @@ mod config;
 mod dsp;
 mod fft;
 mod logo;
+mod pulse;
 mod render;
 mod settings;
 mod term;
