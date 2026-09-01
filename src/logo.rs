@@ -1,7 +1,6 @@
 use std::sync::OnceLock;
 
 pub const LOGO_PNG: &[u8] = include_bytes!("../Logo/paperust.png");
-const IMG_ID: u32 = 1;
 const MAX_IMG_PIXELS: usize = 4096 * 4096;
 const MAX_INFLATE_BYTES: usize = 32 * 1024 * 1024;
 
@@ -48,10 +47,6 @@ fn image() -> Option<&'static Image> {
 }
 
 static TRANSMITTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn transmitted() -> bool {
-    TRANSMITTED.load(std::sync::atomic::Ordering::Relaxed)
-}
 
 fn append(out: &mut Vec<u8>, cap: usize, bytes: &[u8]) {
     if out.len() >= cap {
@@ -271,8 +266,8 @@ impl<'a> BitReader<'a> {
     }
     fn bits(&mut self, n: u32) -> u32 {
         let mut v = 0u32;
-        for _ in 0..n {
-            v = (v << 1) | self.bit();
+        for i in 0..n {
+            v |= self.bit() << i;
         }
         v
     }
@@ -369,8 +364,12 @@ fn fixed_huf() -> Decode<(Huf, Huf)> {
 
 const CLEN_ORDER: [u8; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
 
-fn inflate(deflate: &[u8]) -> Decode<Vec<u8>> {
-    let mut br = BitReader::new(deflate);
+fn inflate(zlib: &[u8]) -> Decode<Vec<u8>> {
+    if zlib.len() < 6 {
+        return Err(());
+    }
+    let data = &zlib[2..zlib.len() - 4]; // skip 2-byte zlib header, drop 4-byte adler32
+    let mut br = BitReader::new(data);
     let mut out: Vec<u8> = Vec::new();
     loop {
         let bfinal = br.bit();
@@ -380,13 +379,13 @@ fn inflate(deflate: &[u8]) -> Decode<Vec<u8>> {
                 br.byte_align();
                 let len = br.bits(16) as usize;
                 let _nlen = br.bits(16);
-                if br.pos + len > deflate.len() {
+                if br.pos + len > data.len() {
                     return Err(());
                 }
                 if out.len() + len > MAX_INFLATE_BYTES {
                     return Err(());
                 }
-                out.extend_from_slice(&deflate[br.pos..br.pos + len]);
+                out.extend_from_slice(&data[br.pos..br.pos + len]);
                 br.pos += len;
             }
             1 | 2 => {
@@ -562,50 +561,26 @@ fn decode_png(data: &[u8]) -> Option<Image> {
     let mut scan: Vec<u8> = vec![0u8; h * stride];
     for y in 0..h {
         let f = raw[y * (stride + 1)];
-        let src = &raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)];
-        let dst = &mut scan[y * stride..(y + 1) * stride];
-        match f {
-            0 => dst.copy_from_slice(src),
-            1 => {
-                for x in 0..stride {
-                    let left = if x >= bpp { dst[x - bpp] as usize } else { 0 };
-                    dst[x] = (src[x] as usize + left) as u8;
-                }
+        let srow = y * stride;
+        if f == 0 {
+            scan[srow..srow + stride].copy_from_slice(&raw[y * (stride + 1) + 1..y * (stride + 1) + 1 + stride]);
+        } else {
+            for x in 0..stride {
+                let left = if x >= bpp { scan[srow + x - bpp] } else { 0 };
+                let up = if y > 0 { scan[srow - stride + x] } else { 0 };
+                let diag = if y > 0 && x >= bpp { scan[srow - stride + x - bpp] } else { 0 };
+                let filt = raw[y * (stride + 1) + 1 + x];
+                scan[srow + x] = match f {
+                    1 => (filt as u16 + left as u16) as u8,
+                    2 => (filt as u16 + up as u16) as u8,
+                    3 => (filt as u16 + ((left as u16 + up as u16) / 2)) as u8,
+                    4 => {
+                        let pr = paeth(left as i32, up as i32, diag as i32);
+                        (filt as i32 + pr).clamp(0, 255) as u8
+                    }
+                    _ => return None,
+                };
             }
-            2 => {
-                for x in 0..stride {
-                    let up = if y > 0 { scan[(y - 1) * stride + x] as usize } else { 0 };
-                    dst[x] = (src[x] as usize + up) as u8;
-                }
-            }
-            3 => {
-                for x in 0..stride {
-                    let left = if x >= bpp { dst[x - bpp] as usize } else { 0 };
-                    let up = if y > 0 { scan[(y - 1) * stride + x] as usize } else { 0 };
-                    dst[x] = (src[x] as usize + (left + up) / 2) as u8;
-                }
-            }
-            4 => {
-                for x in 0..stride {
-                    let a = if x >= bpp { dst[x - bpp] as isize } else { 0 };
-                    let b = if y > 0 { scan[(y - 1) * stride + x] as isize } else { 0 };
-                    let cc = if y > 0 && x >= bpp { scan[(y - 1) * stride + x - bpp] as isize } else { 0 };
-                    let p = a + b - cc;
-                    let pa = (p - a).abs();
-                    let pb = (p - b).abs();
-                    let pc = (p - cc).abs();
-                    let pred = if pa <= pb && pa <= pc {
-                        a
-                    } else if pb <= pc {
-                        b
-                    } else {
-                        cc
-                    };
-                    let v = src[x] as isize + pred;
-                    dst[x] = v.clamp(0, 255) as u8;
-                }
-            }
-            _ => return None,
         }
     }
     let mut rgba = vec![0u8; w * h * 4];
@@ -701,6 +676,20 @@ fn decode_png(data: &[u8]) -> Option<Image> {
     Some(Image { w, h, rgba })
 }
 
+fn paeth(a: i32, b: i32, c: i32) -> i32 {
+    let p = a + b - c;
+    let pa = (p - a).abs();
+    let pb = (p - b).abs();
+    let pc = (p - c).abs();
+    if pa <= pb && pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    }
+}
+
 fn byte_pp(bit_depth: u8) -> usize {
     if bit_depth >= 8 {
         bit_depth as usize / 8
@@ -774,9 +763,9 @@ mod tests {
     #[test]
     fn decodes_logo() {
         let img = decode_png(LOGO_PNG).expect("logo should decode");
-        assert_eq!(img.w, 588);
-        assert_eq!(img.h, 588);
-        assert_eq!(img.rgba.len(), 588 * 588 * 4);
+        assert_eq!(img.w, 586);
+        assert_eq!(img.h, 586);
+        assert_eq!(img.rgba.len(), 586 * 586 * 4);
         let non_zero = img.rgba.iter().filter(|&&b| b != 0).take(16).count();
         assert!(non_zero > 0, "logo should have visible pixels");
     }
