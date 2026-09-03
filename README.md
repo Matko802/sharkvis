@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="Logo/sharkvis.png" width="120" alt="sharkvis logo :3" />
+
 # sharkvis
 
 Linux only audio visualizer, now in Rust
