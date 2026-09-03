@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="Logo/sharkvis.png" width="120" alt="sharkvis logo :3" />
-
 # sharkvis
 
 Linux only audio visualizer, now in Rust
@@ -13,46 +11,21 @@ Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-vi
 ## Features
 
 - PulseAudio / PipeWire support
-- smoothness adjust, noise reduction
-- autosensitivity, manual sensitivity control, adjustable cutoff frequencies
+- Smoothness adjust, noise reduction
+- Autosensitivity, manual sensitivity control, adjustable cutoff frequencies
 - TUI settings
-- color customization
+- Color customization
+- Pure Rust
+- Uses Musl
 
 ## Building
-
-Only Rust (cargo) is required — no system libraries.
 
 ```sh
 git clone https://github.com/Matko802/sharkvis.git
 cd sharkvis
-make deps      
-make           
+make deps
+make
 sudo make install
-```
-
-On NixOS or any distro with Nix, prefer the flake (no system packages needed):
-
-```sh
-nix develop   # drop into a shell with cargo
-make          # build inside the dev shell
-```
-
-Prefer not to touch your system at all?
-
-```sh
-nix run github:Matko802/sharkvis
-```
-
-To install somewhere else instead of `/usr/local`:
-
-```sh
-make PREFIX=$HOME/.local install
-```
-
-### Run it
-
-```sh
-sharkvis
 ```
 
 ## Usage
@@ -63,22 +36,27 @@ sharkvis -p config.conf
 sharkvis -h
 ```
 
-Keys:
-
-| Key               | Action                          |
-| ----------------- | ------------------------------- |
-| `g`               | open settings                   |
-| `q` / `Ctrl-C`    | quit                            |
+| Key | Action |
+| --- | --- |
+| `g` | open settings |
+| `q` / `Ctrl-C` | quit |
 
 The config file is looked up in `$SHARKVIS_CONFIG`, then
 `~/.config/sharkvis/config`, then `./config`. Settings changed in the panel
 are saved automatically when you close the panel or quit.
 
-## Nix flakes
+## Any distro with Nix:
 
-sharkvis ships with its own flake, so you can pull it straight from GitHub.
+```sh
+nix develop   # drop into a shell with cargo
+make          # build inside the dev shell
+```
+Or
+```sh
+nix run github:Matko802/sharkvis
+```
 
-### As a flake input
+## As a flake input
 
 ```nix
 {
@@ -96,12 +74,7 @@ sharkvis ships with its own flake, so you can pull it straight from GitHub.
 }
 ```
 
-### As an overlay
-
-The flake also exposes `overlays.default`, so you can enable it with
-`nixpkgs.overlays = [ sharkvis.overlays.default ];` and get `pkgs.sharkvis`.
-
-A full NixOS example that pulls the flake in as both an overlay and a package:
+## As an overlay
 
 ```nix
 {
@@ -132,19 +105,19 @@ A full NixOS example that pulls the flake in as both an overlay and a package:
 }
 ```
 
-### Standalone build from source
+## Standalone build from source
 
 ```sh
 nix build github:Matko802/sharkvis
 nix run github:Matko802/sharkvis
 ```
 
-### Development
+## Develop
 
 ```sh
-nix develop github:Matko802/sharkvis  
+nix develop github:Matko802/sharkvis
 ```
 
 ## License
 
-This project is released under the MIT License. See [LICENSE.txt](https://github.com/Matko802/sharkvis/blob/main/LICENSE).
+This project is released under the MIT License. See [LICENSE](https://github.com/Matko802/sharkvis/blob/main/LICENSE).
