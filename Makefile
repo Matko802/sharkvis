@@ -17,22 +17,21 @@ clean:
 # Install the build dependencies for the detected distro.
 deps:
 	@if command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get install -y cargo rustc pkg-config libpulse-dev; \
+		sudo apt-get install -y cargo rustc; \
 	elif command -v pacman >/dev/null 2>&1; then \
-		sudo pacman -S --needed rust cargo libpulse; \
+		sudo pacman -S --needed rust cargo; \
 	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf install -y cargo rust pkgconf-pkg-config pulseaudio-libs-devel; \
+		sudo dnf install -y cargo rust; \
 	elif command -v zypper >/dev/null 2>&1; then \
-		sudo zypper install -y cargo rust pkg-config libpulse-devel; \
+		sudo zypper install -y cargo rust; \
 	elif command -v xbps-install >/dev/null 2>&1; then \
-		sudo xbps-install -S cargo rust pkg-config pulseaudio-devel; \
+		sudo xbps-install -S cargo rust; \
 	elif command -v apk >/dev/null 2>&1; then \
-		sudo apk add cargo rust pkgconfig libpulse-dev; \
+		sudo apk add cargo rust; \
 	elif command -v emerge >/dev/null 2>&1; then \
-		sudo emerge --ask dev-lang/rust dev-lang/rust-bin sys-devel/pkgconf media-libs/libpulse; \
+		sudo emerge --ask dev-lang/rust dev-lang/rust-bin; \
 	else \
-		echo "Unsupported package manager. Install cargo, rustc, pkg-config"; \
-		echo "and the libpulse-simple development headers for your distro."; \
+		echo "Unsupported package manager. Install cargo and rustc."; \
 	fi
 
 .PHONY: all install clean deps

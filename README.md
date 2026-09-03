@@ -18,7 +18,7 @@ Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-vi
 
 ## Building
 
-Rust (cargo) and the libpulse-simple development headers are required.
+Only Rust (cargo) is required — no system libraries.
 
 ```sh
 git clone https://github.com/Matko802/sharkvis.git
@@ -31,7 +31,7 @@ sudo make install
 On NixOS or any distro with Nix, prefer the flake (no system packages needed):
 
 ```sh
-nix develop   # drop into a shell with cargo, pkg-config and libpulse
+nix develop   # drop into a shell with cargo
 make          # build inside the dev shell
 ```
 
