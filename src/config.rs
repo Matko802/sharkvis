@@ -140,8 +140,6 @@ pub fn config_default_path() -> String {
     "config".to_string()
 }
 
-/// Mirrors C `strtol`-style parsing: reads an optional sign and as many
-/// leading digits as possible; falls back to `def` if nothing parsed.
 fn geti(v: &[u8], def: i64) -> i64 {
     let s = String::from_utf8_lossy(v).trim().to_string();
     let bytes = s.as_bytes();

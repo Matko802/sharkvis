@@ -404,9 +404,9 @@ impl Pulse {
 
     pub fn record(mut self, device: &str, rate: u32, channels: u8, fragsize: u32) -> Result<Record, String> {
         let map: Vec<u8> = if channels >= 2 {
-            vec![1, 2] // FRONT_LEFT, FRONT_RIGHT
+            vec![1, 2]
         } else {
-            vec![0] // MONO
+            vec![0]
         };
         let tag = self.next_tag();
         let mut body = Writer::new();
@@ -414,34 +414,34 @@ impl Pulse {
         body.channel_map(&map);
         body.u32(PA_INVALID_INDEX);
         body.string(device);
-        body.u32(u32::MAX); // attr.maxlength
-        body.boolean(false); // corked
-        body.u32(fragsize); // attr.fragsize
-        body.boolean(false); // no_remap
-        body.boolean(false); // no_remix
-        body.boolean(false); // fix_format
-        body.boolean(false); // fix_rate
-        body.boolean(false); // fix_channels
-        body.boolean(false); // no_move
-        body.boolean(false); // variable_rate
-        body.boolean(false); // peak_detect
-        body.boolean(false); // adjust_latency
+        body.u32(u32::MAX);
+        body.boolean(false);
+        body.u32(fragsize);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
         body.proplist(&[
             ("media.name", b"sharkvis spectrum".as_slice()),
             ("application.name", b"sharkvis".as_slice()),
             ("application.process.binary", b"sharkvis".as_slice()),
         ]);
-        body.u32(PA_INVALID_INDEX); // direct_on_input
-        body.boolean(false); // early_requests
-        body.boolean(false); // dont_inhibit_auto_suspend
-        body.boolean(false); // fail_on_suspend
-        body.u8(0); // n_formats
+        body.u32(PA_INVALID_INDEX);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.u8(0);
         body.cvolume(channels, PA_VOLUME_NORM);
-        body.boolean(false); // muted
-        body.boolean(false); // volume_set
-        body.boolean(false); // muted_set
-        body.boolean(false); // relative_volume
-        body.boolean(false); // passthrough
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
+        body.boolean(false);
         self.send(CMD_CREATE_RECORD_STREAM, tag, &body)?;
         let reply = self.reply_for(tag)?;
         let mut r = Reader::new(&reply);

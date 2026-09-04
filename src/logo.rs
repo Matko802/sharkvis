@@ -68,9 +68,6 @@ fn truecolor_ok() -> bool {
     })
 }
 
-/// Aspect ratio of a terminal cell (height / width). Uses TIOCGWINSZ pixel
-/// dimensions when the terminal reports them, otherwise falls back to the
-/// common ~2:1 cell shape.
 fn cell_aspect(rows: u32, cols: u32) -> f64 {
     let (xpx, ypx) = term_winsize_px(1);
     if xpx > 0 && ypx > 0 && rows > 0 && cols > 0 {
@@ -84,8 +81,6 @@ fn cell_aspect(rows: u32, cols: u32) -> f64 {
 }
 
 fn box_cells(img: &Image, pw: usize, avail: usize, aspect: f64) -> (usize, usize) {
-    // Columns needed per row of cells so the rendered block keeps the source
-    // image proportion once real cell shapes (aspect) are accounted for.
     let target = img.w as f64 / img.h as f64 * aspect;
     let mut r = avail;
     let mut c = (r as f64 * target).round() as usize;
@@ -419,7 +414,7 @@ fn inflate(zlib: &[u8]) -> Decode<Vec<u8>> {
     if zlib.len() < 6 {
         return Err(());
     }
-    let data = &zlib[2..zlib.len() - 4]; // skip 2-byte zlib header, drop 4-byte adler32
+    let data = &zlib[2..zlib.len() - 4];
     let mut br = BitReader::new(data);
     let mut out: Vec<u8> = Vec::new();
     loop {
@@ -829,8 +824,6 @@ mod tests {
         assert_eq!(&b64[..], b"aGVsbG8gd29ybGQ=");
     }
 
-    // Force the non-image (Blocks) path with 256-color output and check the
-    // rendered cell geometry stays proportionate and uses safe escapes.
     #[test]
     fn blocks_mode_layout() {
         for (k, _) in std::env::vars_os() {
@@ -857,8 +850,6 @@ mod tests {
         assert!(!s.contains("38;2;"), "Blocks mode must not emit raw truecolor SGR");
         assert!(s.contains('\u{2580}'), "Blocks mode should draw half-block cells");
 
-        // With a square logo and cell aspect 2.0, 12 rows fit and should take
-        // ~24 columns -> bottom-aligned block, not a squashed one.
         for i in 29..40 {
             assert!(
                 s.contains(&format!("\x1b[{};1H", i)),
@@ -871,11 +862,8 @@ mod tests {
     #[test]
     fn box_cells_aspect() {
         let img = Image { w: 100, h: 100, rgba: vec![0; 100 * 100 * 4] };
-        // Square cells: square image -> square block.
         assert_eq!(box_cells(&img, 80, 12, 1.0), (12, 12));
-        // Tall cells (aspect 2.0): need 2 columns per row to stay square.
         assert_eq!(box_cells(&img, 80, 12, 2.0), (24, 12));
-        // Wide image on a ~2:1 cell stays within the panel width.
         assert_eq!(box_cells(&img, 28, 12, 2.0), (24, 12));
     }
 }

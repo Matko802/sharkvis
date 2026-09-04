@@ -24,8 +24,6 @@ pub fn term_winsize(fd: RawFd, rows: &mut u32, cols: &mut u32) -> bool {
     true
 }
 
-/// Terminal pixel dimensions (total) from TIOCGWINSZ, if the terminal
-/// reports them. Returns (0, 0) when unavailable.
 pub fn term_winsize_px(fd: RawFd) -> (u32, u32) {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } != 0 {
@@ -104,8 +102,6 @@ pub fn term_read_key(fd: RawFd) -> i32 {
     KEY_ESC
 }
 
-/// Reads a key press. Returns `(key, codepoint bytes, length of codepoint)`.
-/// When `key == KEY_CHAR`, `cp[..len]` holds the UTF-8 sequence.
 pub fn term_read_codepoint(fd: RawFd, out: &mut [u8; 8]) -> (i32, usize) {
     let c = match read_byte(fd) {
         Some(c) => c,
