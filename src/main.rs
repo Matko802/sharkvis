@@ -407,8 +407,6 @@ fn main() {
     let mut chmask: u32 = 0;
 
     let mut next = Instant::now();
-
-    // Publishes color/energy/beat for followers (e.g. jefetch).
     let mut live = state::StateWriter::new();
 
     let mut rc = 0;
@@ -567,8 +565,6 @@ fn main() {
         }
 
         {
-            // Overall volume drives size/speed; the bass quarter drives the
-            // beat detector (kicks live down low, the mean dilutes them).
             let nbass = per_ch_left(bars, cfg.channels).max(2) / 4 + 1;
             let mut sum = 0.0f64;
             let mut cnt = 0usize;

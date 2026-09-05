@@ -1,21 +1,3 @@
-//! Live state file for external consumers (e.g. jefetch).
-//!
-//! While running, sharkvis publishes its current look and groove ~20x per
-//! second so other tools can follow along:
-//!
-//! ```text
-//! color=#ff8800 energy=0.42 beat=1.00
-//! ```
-//!
-//! * `color` — gradient color lerped by the current energy (`#rrggbb`)
-//! * `energy` — mean bar height, `0..1`
-//! * `beat` — beat envelope, `0..1` (`1` on onset, decays after)
-//!
-//! Location: `$XDG_RUNTIME_DIR/sharkvis/state`, falling back to
-//! `/tmp/sharkvis-$UID.state`. Readers treat files older than ~1s as stale.
-//! All I/O failures are silent by design; set `SHARKVIS_NO_STATE=1` to
-//! disable publishing entirely.
-
 use std::time::{Duration, Instant};
 
 const WRITE_EVERY: Duration = Duration::from_millis(50);
@@ -50,9 +32,6 @@ impl StateWriter {
         }
     }
 
-    /// Feed the current levels: overall `energy` (volume, drives color)
-    /// plus `bass` (drives the beat detector). Tracks the beat envelope
-    /// and publishes the state file (throttled).
     pub fn update(&mut self, energy: f64, bass: f64, low: (u8, u8, u8), high: (u8, u8, u8)) {
         let now = Instant::now();
         let dt = self
@@ -93,7 +72,6 @@ impl StateWriter {
             r, g, b, e, self.beat
         );
         if std::fs::write(&path, body.as_bytes()).is_err() {
-            // Retry the mkdir next time (e.g. runtime dir appeared late).
             self.dir_ready = false;
         }
     }
@@ -105,14 +83,6 @@ impl Default for StateWriter {
     }
 }
 
-/// One onset-tracking step. Returns `(avg, peak, prev, beat)`.
-///
-/// Fixed thresholds miss kicks whenever the loudness changes (dense
-/// masters sit high, breakdowns low), so the onset is normalized by the
-/// recent dynamic range instead: `strength = (bass - avg) / (peak - avg)`.
-/// Anything above ~0.55 of the recent range counts as a kick, at any
-/// volume — but only on a rising edge, so sustained loud beds stay quiet.
-/// `peak` is a slow-release ceiling, `avg` a slow follower.
 pub fn beat_step(energy: f64, avg: f64, peak: f64, prev: f64, beat: f64, dt: f64) -> (f64, f64, f64, f64) {
     let avg = avg + (energy - avg) * (1.0 - (-dt * 1.5).exp());
     let peak = energy.max(peak * (-dt * 0.8).exp());
@@ -158,11 +128,9 @@ mod tests {
         let mut peak = 0.0;
         let mut prev = 0.0;
         let mut beat = 0.0;
-        // Settle into quiet room tone.
         for _ in 0..120 {
             (avg, peak, prev, beat) = beat_step(0.1, avg, peak, prev, beat, dt);
         }
-        // Three kicks: sharp attack, exponential decay, back to room tone.
         let mut fires = 0;
         for _ in 0..3 {
             for e in [0.35, 0.3, 0.25, 0.2, 0.16, 0.13] {
@@ -184,27 +152,22 @@ mod tests {
         let mut peak = 0.0;
         let mut prev = 0.0;
         let mut beat = 0.0;
-        // Silence settles the follower.
         for _ in 0..120 {
             (avg, peak, prev, beat) = beat_step(0.0, avg, peak, prev, beat, 1.0 / 60.0);
         }
         assert!(avg < 0.01);
-        // Sudden energy is a beat.
         (avg, peak, prev, beat) = beat_step(0.8, avg, peak, prev, beat, 1.0 / 60.0);
         assert_eq!(beat, 1.0);
-        // It decays without new onsets.
         for _ in 0..120 {
             (avg, peak, prev, beat) = beat_step(0.8, avg, peak, prev, beat, 1.0 / 60.0);
         }
         assert!(beat < 0.1, "beat should decay, got {}", beat);
-        // Quiet floor never fires.
         (_, _, _, beat) = beat_step(0.05, 0.0, 0.0, 0.0, 0.0, 1.0 / 60.0);
         assert_eq!(beat, 0.0);
     }
 
     #[test]
     fn weak_kicks_still_fire() {
-        // Quiet bass-heavy material: small absolute jumps must fire.
         let dt = 1.0 / 60.0;
         let mut avg = 0.0;
         let mut peak = 0.0;
@@ -215,14 +178,12 @@ mod tests {
         }
         (_, _, _, beat) = beat_step(0.26, avg, peak, prev, beat, dt);
         assert_eq!(beat, 1.0, "0.13 -> 0.26 onset must fire");
-        // But steady hiss at the same level must not.
         (_, _, _, beat) = beat_step(0.05, 0.0, 0.0, 0.0, 0.0, dt);
         assert_eq!(beat, 0.0);
     }
 
     #[test]
     fn dense_loud_kicks_fire_without_false_hits() {
-        // Compressed master: kicks ride on a hot bed, small headroom.
         let dt = 1.0 / 60.0;
         let mut avg = 0.0;
         let mut peak = 0.0;
@@ -232,7 +193,6 @@ mod tests {
             (avg, peak, prev, beat) = beat_step(0.5, avg, peak, prev, beat, dt);
         }
         beat = 0.0;
-        // Steady loud bed alone must not fire.
         let mut false_hits = 0;
         for _ in 0..120 {
             (avg, peak, prev, beat) = beat_step(0.5, avg, peak, prev, beat, dt);
@@ -241,7 +201,6 @@ mod tests {
             }
         }
         assert_eq!(false_hits, 0, "steady loud bed must not fire");
-        // Kicks on top must fire every time.
         let mut fires = 0;
         for _ in 0..3 {
             for e in [0.65, 0.6, 0.55, 0.52] {
@@ -266,7 +225,6 @@ mod tests {
 
     #[test]
     fn state_body_matches_jefetch_protocol() {
-        // jefetch parses `color=#rrggbb energy=0..1 beat=0..1`.
         let (r, g, b) = lerp_rgb((255, 255, 0), (255, 0, 0), 0.5);
         let body = format!("color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2}\n", r, g, b, 0.5, 1.0);
         assert!(body.starts_with("color=#"), "got {}", body);
