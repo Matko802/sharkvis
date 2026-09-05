@@ -24,14 +24,6 @@ pub fn term_winsize(fd: RawFd, rows: &mut u32, cols: &mut u32) -> bool {
     true
 }
 
-pub fn term_winsize_px(fd: RawFd) -> (u32, u32) {
-    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } != 0 {
-        return (0, 0);
-    }
-    (ws.ws_xpixel as u32, ws.ws_ypixel as u32)
-}
-
 pub fn term_raw_enter(fd: RawFd) -> bool {
     let mut t: libc::termios = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(fd, &mut t) } != 0 {
