@@ -58,14 +58,13 @@ Nix flake:
 
 ```sh
 cd ~/fish-flake
-nix flake update sharkvis
-nh os switch -H machine1
+nix flake update sharkvis; nh os switch -H machine1
 ```
 
 Standalone:
 
 ```sh
-cd sharkvis && git pull && make && sudo make install
+cd sharkvis && git pull; make && sudo make install
 ```
 
 Restart running copies after updating (`q` to quit, relaunch).
