@@ -567,23 +567,38 @@ fn main() {
         }
 
         {
+            // Overall volume drives size/speed; the bass quarter drives the
+            // beat detector (kicks live down low, the mean dilutes them).
+            let nbass = per_ch_left(bars, cfg.channels).max(2) / 4 + 1;
             let mut sum = 0.0f64;
             let mut cnt = 0usize;
+            let mut bsum = 0.0f64;
+            let mut bcnt = 0usize;
             for i in 0..pcl.min(heights[0].len()) {
                 sum += heights[0][i];
                 cnt += 1;
+                if i < nbass {
+                    bsum += heights[0][i];
+                    bcnt += 1;
+                }
             }
             if cfg.channels > 1 {
+                let nbass_r = pcr.max(2) / 4 + 1;
                 for i in 0..pcr.min(heights[1].len()) {
                     sum += heights[1][i];
                     cnt += 1;
+                    if i < nbass_r {
+                        bsum += heights[1][i];
+                        bcnt += 1;
+                    }
                 }
             }
             let energy = if cnt > 0 { sum / cnt as f64 } else { 0.0 };
+            let bass = if bcnt > 0 { bsum / bcnt as f64 } else { energy };
             let lo = color_to_rgb(&cfg.gradient_low).unwrap_or((255, 255, 255));
             let hi = color_to_rgb(&cfg.gradient_high).unwrap_or((255, 255, 255));
             let cv = |(r, g, b): (u32, u32, u32)| (r as u8, g as u8, b as u8);
-            live.update(energy, cv(lo), cv(hi));
+            live.update(energy, bass, cv(lo), cv(hi));
         }
 
         let mut need_draw = force_draw || in_settings;

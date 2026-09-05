@@ -53,8 +53,15 @@ While running, sharkvis publishes `color=#rrggbb energy=0..1 beat=0..1`
 ~20x per second to `$XDG_RUNTIME_DIR/sharkvis/state`
 (fallback `/tmp/sharkvis-$UID.state`) so tools like
 [jefetch](https://github.com/Matko802/jefetch) can match its color and
-pulse with the beat. Files older than ~1s are stale. Set
-`SHARKVIS_NO_STATE=1` to disable.
+react to the volume:
+
+- `color` — gradient color at the current volume (`#rrggbb`)
+- `energy` — overall volume, mean bar height `0..1`
+- `beat` — beat envelope `0..1`, tracked on the bass bars where kicks
+  live (`1` on a kick, decaying after)
+
+Files older than ~1s are stale. Set `SHARKVIS_NO_STATE=1` to disable.
+Note: the monitor sees audio only — no song titles or metadata.
 
 ## Any distro with Nix:
 

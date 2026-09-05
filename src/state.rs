@@ -46,9 +46,10 @@ impl StateWriter {
         }
     }
 
-    /// Feed the current mean bar height (`0..1`) plus gradient ends.
-    /// Tracks the beat envelope and publishes the state file (throttled).
-    pub fn update(&mut self, energy: f64, low: (u8, u8, u8), high: (u8, u8, u8)) {
+    /// Feed the current levels: overall `energy` (volume, drives color)
+    /// plus `bass` (drives the beat detector). Tracks the beat envelope
+    /// and publishes the state file (throttled).
+    pub fn update(&mut self, energy: f64, bass: f64, low: (u8, u8, u8), high: (u8, u8, u8)) {
         let now = Instant::now();
         let dt = self
             .last_tick
@@ -57,7 +58,7 @@ impl StateWriter {
         self.last_tick = Some(now);
 
         let e = energy.clamp(0.0, 1.0);
-        let (avg, beat) = beat_step(e, self.avg, self.beat, dt);
+        let (avg, beat) = beat_step(bass.clamp(0.0, 1.0), self.avg, self.beat, dt);
         self.avg = avg;
         self.beat = beat;
 
@@ -101,7 +102,7 @@ impl Default for StateWriter {
 pub fn beat_step(energy: f64, avg: f64, beat: f64, dt: f64) -> (f64, f64) {
     // Slow follower (~1.5/s) + fast-decaying envelope (~5/s).
     let avg = avg + (energy - avg) * (1.0 - (-dt * 1.5).exp());
-    let beat = if energy > avg * 1.5 + 0.08 && energy > 0.12 {
+    let beat = if energy > avg * 1.25 + 0.04 && energy > 0.06 {
         1.0
     } else {
         beat * (-dt * 5.0).exp()
@@ -135,6 +136,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn beat_fires_on_repeating_kicks() {
+        let dt = 1.0 / 60.0;
+        let mut avg = 0.0;
+        let mut beat = 0.0;
+        // Settle into quiet room tone.
+        for _ in 0..120 {
+            (avg, beat) = beat_step(0.1, avg, beat, dt);
+        }
+        // Three kicks: sharp attack, exponential decay, back to room tone.
+        let mut fires = 0;
+        for _ in 0..3 {
+            for e in [0.35, 0.3, 0.25, 0.2, 0.16, 0.13] {
+                (avg, beat) = beat_step(e, avg, beat, dt);
+                if beat == 1.0 {
+                    fires += 1;
+                }
+            }
+            for _ in 0..24 {
+                (avg, beat) = beat_step(0.1, avg, beat, dt);
+            }
+        }
+        assert!(fires >= 3, "each kick should fire, got {} fires", fires);
+    }
+
+    #[test]
     fn beat_fires_on_onset_then_decays() {
         let mut avg = 0.0;
         let mut beat = 0.0;
@@ -153,6 +179,22 @@ mod tests {
         assert!(beat < 0.1, "beat should decay, got {}", beat);
         // Quiet floor never fires.
         (_, beat) = beat_step(0.05, 0.0, 0.0, 1.0 / 60.0);
+        assert_eq!(beat, 0.0);
+    }
+
+    #[test]
+    fn weak_kicks_still_fire() {
+        // Quiet bass-heavy material: small absolute jumps must fire.
+        let dt = 1.0 / 60.0;
+        let mut avg = 0.0;
+        let mut beat = 0.0;
+        for _ in 0..120 {
+            (avg, beat) = beat_step(0.13, avg, beat, dt);
+        }
+        (_, beat) = beat_step(0.26, avg, beat, dt);
+        assert_eq!(beat, 1.0, "0.13 -> 0.26 onset must fire");
+        // But steady hiss at the same level must not.
+        (_, beat) = beat_step(0.05, 0.0, 0.0, dt);
         assert_eq!(beat, 0.0);
     }
 
@@ -186,7 +228,7 @@ mod tests {
         std::env::set_var("SHARKVIS_NO_STATE", "1");
         let mut w = StateWriter::new();
         assert!(w.path.is_none());
-        w.update(0.9, (0, 0, 0), (255, 255, 255));
+        w.update(0.9, 0.9, (0, 0, 0), (255, 255, 255));
         std::env::remove_var("SHARKVIS_NO_STATE");
     }
 }
