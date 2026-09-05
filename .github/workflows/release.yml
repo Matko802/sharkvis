@@ -24,6 +24,8 @@ jobs:
             asset: sharkvis-linux-aarch64.tar.gz
     steps:
       - uses: actions/checkout@v4
+      - name: allow workspace in container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: build static binary
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: package
