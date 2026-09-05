@@ -62,7 +62,13 @@ impl StateWriter {
             "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x}\n",
             r, g, b, e, beat, lr, lg, lb, hr, hg, hb
         );
-        if std::fs::write(&path, body.as_bytes()).is_err() {
+        let tmp = format!("{}.tmp", path);
+        if std::fs::write(&tmp, body.as_bytes()).is_ok() {
+            if std::fs::rename(&tmp, &path).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+                self.dir_ready = false;
+            }
+        } else {
             self.dir_ready = false;
         }
     }
@@ -535,5 +541,28 @@ mod tests {
         assert!(w.path.is_none());
         w.update(0.9, 0.9, (0, 0, 0), (255, 255, 255));
         std::env::remove_var("SHARKVIS_NO_STATE");
+    }
+
+    #[test]
+    fn writes_land_atomically() {
+        let path = std::env::temp_dir().join(format!("sharkvis-atomic-{}", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}.tmp", path));
+        let mut w = StateWriter::new();
+        w.path = Some(path.clone());
+        w.dir_ready = true;
+        for _ in 0..5 {
+            w.update(0.5, 0.4, (0, 0, 255), (255, 0, 0));
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("color_low=#0000ff"), "complete body, got {}", text);
+        assert!(text.contains("color_high=#ff0000"), "complete body, got {}", text);
+        assert!(
+            !std::path::Path::new(&format!("{}.tmp", path)).exists(),
+            "no temp leftovers"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }
