@@ -35,7 +35,7 @@ impl StateWriter {
         self.last_tick = Some(now);
 
         let e = energy.clamp(0.0, 1.0);
-        let beat = self.tracker.step(bass.clamp(0.0, 1.0), dt);
+        let beat = self.tracker.step(e, bass.clamp(0.0, 1.0), dt);
 
         let path = match &self.path {
             Some(p) => p.clone(),
@@ -89,6 +89,9 @@ pub struct BeatTracker {
     avg: f64,
     peak: f64,
     prev: f64,
+    favg: f64,
+    fpeak: f64,
+    fprev: f64,
     beat: f64,
     now: f64,
     onsets: [f64; 8],
@@ -104,6 +107,9 @@ impl BeatTracker {
             avg: 0.0,
             peak: 0.0,
             prev: 0.0,
+            favg: 0.0,
+            fpeak: 0.0,
+            fprev: 0.0,
             beat: 0.0,
             now: 0.0,
             onsets: [0.0; 8],
@@ -118,22 +124,31 @@ impl BeatTracker {
         self.period
     }
 
-    pub fn step(&mut self, energy: f64, dt: f64) -> f64 {
+    pub fn step(&mut self, full: f64, bass: f64, dt: f64) -> f64 {
         let dt = dt.clamp(0.001, 1.0);
         self.now += dt;
-        let e = energy.clamp(0.0, 1.0);
+        let e = bass.clamp(0.0, 1.0);
+        let f = full.clamp(0.0, 1.0);
         let (avg, peak, prev, b) = beat_step(e, self.avg, self.peak, self.prev, self.beat, dt);
         self.avg = avg;
         self.peak = peak;
         self.prev = prev;
-        if b == 1.0 {
+        let (favg, fpeak, fprev, fb) = beat_step(f, self.favg, self.fpeak, self.fprev, self.beat, dt);
+        self.favg = favg;
+        self.fpeak = fpeak;
+        self.fprev = fprev;
+        if b == 1.0 || fb == 1.0 {
             self.push_onset();
             self.beat = 1.0;
         } else if self.period > 0.0 {
             let window = 0.12 * self.period;
-            let range = (self.peak - self.avg).max(0.05);
-            let strength = ((e - self.avg) / range).clamp(0.0, 1.0);
-            if self.now >= self.next - window && strength > 0.25 && e > 0.05 {
+            let brange = (self.peak - self.avg).max(0.05);
+            let frange = (self.fpeak - self.favg).max(0.05);
+            let bstrength = ((e - self.avg) / brange).clamp(0.0, 1.0);
+            let fstrength = ((f - self.favg) / frange).clamp(0.0, 1.0);
+            let strength = bstrength.max(fstrength);
+            let loud = e.max(f);
+            if self.now >= self.next - window && strength > 0.25 && loud > 0.05 {
                 self.beat = 1.0;
                 self.misses = 0.0;
                 self.next += self.period;
@@ -148,7 +163,7 @@ impl BeatTracker {
                 }
             }
         } else {
-            self.beat = b;
+            self.beat = b.max(fb);
         }
         self.beat.clamp(0.0, 1.0)
     }
@@ -339,12 +354,12 @@ mod tests {
 
     fn kick_series(dt: f64, period_frames: usize, kick: f64, bed: f64, n_kicks: usize, tr: &mut BeatTracker) {
         for _ in 0..(period_frames * 2) {
-            tr.step(bed, dt);
+            tr.step(bed, bed, dt);
         }
         for _ in 0..n_kicks {
-            tr.step(kick, dt);
+            tr.step(kick, kick, dt);
             for _ in 1..period_frames {
-                tr.step(bed, dt);
+                tr.step(bed, bed, dt);
             }
         }
     }
@@ -357,15 +372,28 @@ mod tests {
         assert!((tr.period() - 0.5).abs() < 0.05, "locks 120bpm, got {}", tr.period());
         let mut filled = 0;
         for _ in 0..4 {
-            let b = tr.step(0.3, dt);
+            let b = tr.step(0.3, 0.3, dt);
             for _ in 1..30 {
-                tr.step(0.15, dt);
+                tr.step(0.15, 0.15, dt);
             }
             if b == 1.0 {
                 filled += 1;
             }
         }
         assert!(filled >= 3, "soft kicks fire on the grid, got {}", filled);
+    }
+
+    #[test]
+    fn snare_without_bass_fires() {
+        let dt = 1.0 / 60.0;
+        let mut tr = BeatTracker::new();
+        for _ in 0..120 {
+            tr.step(0.12, 0.12, dt);
+        }
+        let b = tr.step(0.55, 0.12, dt);
+        assert_eq!(b, 1.0, "mid/high onset fires with flat bass");
+        let b = tr.step(0.12, 0.12, dt);
+        assert!(b < 1.0, "bed alone stays quiet");
     }
 
     #[test]
@@ -389,7 +417,7 @@ mod tests {
         kick_series(dt, 30, 0.7, 0.15, 8, &mut tr);
         assert!(tr.period() > 0.0);
         for _ in 0..(60 * 4) {
-            tr.step(0.12, dt);
+            tr.step(0.12, 0.12, dt);
         }
         assert_eq!(tr.period(), 0.0, "lock drops after unsupported grid");
     }
