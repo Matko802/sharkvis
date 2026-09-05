@@ -66,7 +66,7 @@ nh os switch -H machine1
 Standalone:
 
 ```sh
-cd sharkvis && git pull && ./build.sh && sudo make install
+cd sharkvis && git pull && make && sudo make install
 cd ../jefetch && git pull && ./build.sh && sudo make install
 ```
 
