@@ -5,10 +5,7 @@ const WRITE_EVERY: Duration = Duration::from_millis(50);
 pub struct StateWriter {
     path: Option<String>,
     last_write: Option<Instant>,
-    avg: f64,
-    peak: f64,
-    prev: f64,
-    beat: f64,
+    tracker: BeatTracker,
     last_tick: Option<Instant>,
     dir_ready: bool,
 }
@@ -23,10 +20,7 @@ impl StateWriter {
         StateWriter {
             path,
             last_write: None,
-            avg: 0.0,
-            peak: 0.0,
-            prev: 0.0,
-            beat: 0.0,
+            tracker: BeatTracker::new(),
             last_tick: None,
             dir_ready: false,
         }
@@ -41,12 +35,7 @@ impl StateWriter {
         self.last_tick = Some(now);
 
         let e = energy.clamp(0.0, 1.0);
-        let (avg, peak, prev, beat) =
-            beat_step(bass.clamp(0.0, 1.0), self.avg, self.peak, self.prev, self.beat, dt);
-        self.avg = avg;
-        self.peak = peak;
-        self.prev = prev;
-        self.beat = beat;
+        let beat = self.tracker.step(bass.clamp(0.0, 1.0), dt);
 
         let path = match &self.path {
             Some(p) => p.clone(),
@@ -69,7 +58,7 @@ impl StateWriter {
         let (r, g, b) = lerp_rgb(low, high, e as f32);
         let body = format!(
             "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2}\n",
-            r, g, b, e, self.beat
+            r, g, b, e, beat
         );
         if std::fs::write(&path, body.as_bytes()).is_err() {
             self.dir_ready = false;
@@ -94,6 +83,138 @@ pub fn beat_step(energy: f64, avg: f64, peak: f64, prev: f64, beat: f64, dt: f64
         beat * (-dt * 5.0).exp()
     };
     (avg, peak, energy, beat.clamp(0.0, 1.0))
+}
+
+pub struct BeatTracker {
+    avg: f64,
+    peak: f64,
+    prev: f64,
+    beat: f64,
+    now: f64,
+    onsets: [f64; 8],
+    n: usize,
+    period: f64,
+    next: f64,
+    misses: f32,
+}
+
+impl BeatTracker {
+    pub fn new() -> BeatTracker {
+        BeatTracker {
+            avg: 0.0,
+            peak: 0.0,
+            prev: 0.0,
+            beat: 0.0,
+            now: 0.0,
+            onsets: [0.0; 8],
+            n: 0,
+            period: 0.0,
+            next: 0.0,
+            misses: 0.0,
+        }
+    }
+
+    pub fn period(&self) -> f64 {
+        self.period
+    }
+
+    pub fn step(&mut self, energy: f64, dt: f64) -> f64 {
+        let dt = dt.clamp(0.001, 1.0);
+        self.now += dt;
+        let e = energy.clamp(0.0, 1.0);
+        let (avg, peak, prev, b) = beat_step(e, self.avg, self.peak, self.prev, self.beat, dt);
+        self.avg = avg;
+        self.peak = peak;
+        self.prev = prev;
+        if b == 1.0 {
+            self.push_onset();
+            self.beat = 1.0;
+        } else if self.period > 0.0 {
+            let window = 0.12 * self.period;
+            let range = (self.peak - self.avg).max(0.05);
+            let strength = ((e - self.avg) / range).clamp(0.0, 1.0);
+            if self.now >= self.next - window && strength > 0.25 && e > 0.05 {
+                self.beat = 1.0;
+                self.misses = 0.0;
+                self.next += self.period;
+            } else {
+                self.beat *= (-dt * 5.0).exp();
+                if self.now > self.next + window {
+                    self.misses += 1.0;
+                    self.next += self.period;
+                    if self.misses >= 4.0 {
+                        self.period = 0.0;
+                    }
+                }
+            }
+        } else {
+            self.beat = b;
+        }
+        self.beat.clamp(0.0, 1.0)
+    }
+
+    fn push_onset(&mut self) {
+        let t = self.now;
+        if self.n < 8 {
+            self.onsets[self.n] = t;
+            self.n += 1;
+        } else {
+            self.onsets.copy_within(1.., 0);
+            self.onsets[7] = t;
+        }
+        if self.n < 5 {
+            return;
+        }
+        if let Some(p) = estimate_period(&self.onsets[..self.n]) {
+            if self.period <= 0.0 || (p - self.period).abs() / self.period > 0.15 {
+                self.period = p;
+                self.next = t + p;
+                self.misses = 0.0;
+            } else {
+                let window = 0.12 * self.period;
+                if (self.next - t).abs() <= window {
+                    self.next = t + self.period;
+                    self.misses = 0.0;
+                }
+            }
+        }
+    }
+}
+
+impl Default for BeatTracker {
+    fn default() -> Self {
+        BeatTracker::new()
+    }
+}
+
+fn estimate_period(times: &[f64]) -> Option<f64> {
+    let mut iois = [0.0f64; 8];
+    let mut n = 0usize;
+    for w in times.windows(2) {
+        let d = w[1] - w[0];
+        if d > 0.05 && n < 8 {
+            iois[n] = d;
+            n += 1;
+        }
+    }
+    if n < 3 {
+        return None;
+    }
+    for i in 1..n {
+        let mut j = i;
+        while j > 0 && iois[j] < iois[j - 1] {
+            iois.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+    let mut p = iois[n / 2].clamp(0.2, 1.5);
+    while p > 0.65 {
+        p /= 2.0;
+    }
+    while p < 0.30 {
+        p *= 2.0;
+    }
+    Some(p)
 }
 
 pub fn lerp_rgb(lo: (u8, u8, u8), hi: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
@@ -214,6 +335,63 @@ mod tests {
             }
         }
         assert!(fires >= 3, "each loud kick should fire, got {}", fires);
+    }
+
+    fn kick_series(dt: f64, period_frames: usize, kick: f64, bed: f64, n_kicks: usize, tr: &mut BeatTracker) {
+        for _ in 0..(period_frames * 2) {
+            tr.step(bed, dt);
+        }
+        for _ in 0..n_kicks {
+            tr.step(kick, dt);
+            for _ in 1..period_frames {
+                tr.step(bed, dt);
+            }
+        }
+    }
+
+    #[test]
+    fn tracker_locks_tempo_and_fills_soft_kicks() {
+        let dt = 1.0 / 60.0;
+        let mut tr = BeatTracker::new();
+        kick_series(dt, 30, 0.7, 0.15, 8, &mut tr);
+        assert!((tr.period() - 0.5).abs() < 0.05, "locks 120bpm, got {}", tr.period());
+        let mut filled = 0;
+        for _ in 0..4 {
+            let b = tr.step(0.3, dt);
+            for _ in 1..30 {
+                tr.step(0.15, dt);
+            }
+            if b == 1.0 {
+                filled += 1;
+            }
+        }
+        assert!(filled >= 3, "soft kicks fire on the grid, got {}", filled);
+    }
+
+    #[test]
+    fn tracker_recalibrates_on_tempo_change() {
+        let dt = 1.0 / 60.0;
+        let mut tr = BeatTracker::new();
+        kick_series(dt, 30, 0.7, 0.15, 8, &mut tr);
+        assert!((tr.period() - 0.5).abs() < 0.05);
+        kick_series(dt, 24, 0.7, 0.15, 12, &mut tr);
+        assert!(
+            (tr.period() - 0.4).abs() < 0.05,
+            "recalibrates to 150bpm, got {}",
+            tr.period()
+        );
+    }
+
+    #[test]
+    fn tracker_unlocks_in_silence() {
+        let dt = 1.0 / 60.0;
+        let mut tr = BeatTracker::new();
+        kick_series(dt, 30, 0.7, 0.15, 8, &mut tr);
+        assert!(tr.period() > 0.0);
+        for _ in 0..(60 * 4) {
+            tr.step(0.12, dt);
+        }
+        assert_eq!(tr.period(), 0.0, "lock drops after unsupported grid");
     }
 
     #[test]

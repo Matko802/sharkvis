@@ -57,8 +57,9 @@ react to the volume:
 
 - `color` — gradient color at the current volume (`#rrggbb`)
 - `energy` — overall volume, mean bar height `0..1`
-- `beat` — beat envelope `0..1`, normalized bass onset (`1` on a kick
-  at any volume, decaying after; sustained beds stay quiet)
+- `beat` — beat envelope `0..1`: kicks lock a tempo grid that keeps
+  pulsing through soft hits, recalibrates on tempo changes, and drops
+  after unsupported bars
 
 Files older than ~1s are stale. Set `SHARKVIS_NO_STATE=1` to disable.
 Note: the monitor sees audio only — no song titles or metadata.
