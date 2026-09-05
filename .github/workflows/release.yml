@@ -1,0 +1,51 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            image: messense/rust-musl-cross:x86_64-musl
+            asset: sharkvis-linux-x86_64.tar.gz
+          - target: aarch64-unknown-linux-musl
+            image: messense/rust-musl-cross:aarch64-musl
+            asset: sharkvis-linux-aarch64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - name: build static binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: package
+        run: |
+          cp target/${{ matrix.target }}/release/sharkvis sharkvis
+          tar -czf ${{ matrix.asset }} sharkvis
+          rm sharkvis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
