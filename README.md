@@ -20,14 +20,6 @@ Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-vi
 - Pure Rust
 - Uses Musl
 
-## Install
-
-Needs a running PulseAudio or PipeWire-pulse server for audio capture:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Matko802/sharkvis/main/install.sh | sh
-```
-
 ## Building
 
 ```sh
