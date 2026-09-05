@@ -19,8 +19,8 @@ const S_NOISE: usize = 6;
 const S_LOW: usize = 7;
 const S_HIGH: usize = 8;
 const S_CMODE: usize = 9;
-const S_GLO: usize = 10;
-const S_GHI: usize = 11;
+const S_GHI: usize = 10;
+const S_GLO: usize = 11;
 const S_MODE: usize = 12;
 const S_RATE: usize = 13;
 const S_CH: usize = 14;
@@ -41,8 +41,8 @@ const LABELS: [&str; S_COUNT] = [
     "lower cutoff",
     "upper cutoff",
     "color mode",
-    "color low",
     "color high",
+    "color low",
     "visualizer",
     "sample rate",
     "channels",

@@ -56,9 +56,11 @@ impl StateWriter {
             }
         }
         let (r, g, b) = lerp_rgb(low, high, e as f32);
+        let (lr, lg, lb) = low;
+        let (hr, hg, hb) = high;
         let body = format!(
-            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2}\n",
-            r, g, b, e, beat
+            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x}\n",
+            r, g, b, e, beat, lr, lg, lb, hr, hg, hb
         );
         if std::fs::write(&path, body.as_bytes()).is_err() {
             self.dir_ready = false;

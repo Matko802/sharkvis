@@ -49,11 +49,15 @@ are saved automatically when you close the panel or quit.
 
 ## Live state file (jefetch integration)
 
-While running, sharkvis publishes `color=#rrggbb energy=0..1 beat=0..1`
-~20x per second to `$XDG_RUNTIME_DIR/sharkvis/state`
+While running, sharkvis publishes color, levels and gradients ~20x per
+second to `$XDG_RUNTIME_DIR/sharkvis/state`
 (fallback `/tmp/sharkvis-$UID.state`) so tools like
-[jefetch](https://github.com/Matko802/jefetch) can match its color and
-react to the volume:
+[jefetch](https://github.com/Matko802/jefetch) follow instantly, without
+waiting for the settings panel to close:
+
+```text
+color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000
+```
 
 - `color` — gradient color at the current volume (`#rrggbb`)
 - `energy` — overall volume, mean bar height `0..1`
