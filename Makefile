@@ -14,6 +14,9 @@ install: target/release/sharkvis
 clean:
 	cargo clean
 
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/sharkvis
+
 # Install the build dependencies for the detected distro.
 deps:
 	@if command -v apt-get >/dev/null 2>&1; then \
@@ -34,4 +37,4 @@ deps:
 		echo "Unsupported package manager. Install cargo and rustc."; \
 	fi
 
-.PHONY: all install clean deps
+.PHONY: all install uninstall clean deps
