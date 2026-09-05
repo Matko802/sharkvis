@@ -64,7 +64,7 @@ nix flake update sharkvis; nh os switch -H machine1
 Standalone:
 
 ```sh
-cd sharkvis && git pull; make && sudo make install
+cd /mnt/ssd/My-Files/Projects/sharkvis && git pull; make && sudo make install
 ```
 
 Restart running copies after updating (`q` to quit, relaunch).
