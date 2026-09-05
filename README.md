@@ -47,6 +47,15 @@ The config file is looked up in `$SHARKVIS_CONFIG`, then
 `~/.config/sharkvis/config`, then `./config`. Settings changed in the panel
 are saved automatically when you close the panel or quit.
 
+## Live state file (jefetch integration)
+
+While running, sharkvis publishes `color=#rrggbb energy=0..1 beat=0..1`
+~20x per second to `$XDG_RUNTIME_DIR/sharkvis/state`
+(fallback `/tmp/sharkvis-$UID.state`) so tools like
+[jefetch](https://github.com/Matko802/jefetch) can match its color and
+pulse with the beat. Files older than ~1s are stale. Set
+`SHARKVIS_NO_STATE=1` to disable.
+
 ## Any distro with Nix:
 
 ```sh

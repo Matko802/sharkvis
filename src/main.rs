@@ -12,6 +12,7 @@ mod logo;
 mod pulse;
 mod render;
 mod settings;
+mod state;
 mod term;
 
 use crate::audio::Audio;
@@ -407,6 +408,9 @@ fn main() {
 
     let mut next = Instant::now();
 
+    // Publishes color/energy/beat for followers (e.g. jefetch).
+    let mut live = state::StateWriter::new();
+
     let mut rc = 0;
     while !G_SIG.load(Ordering::SeqCst) {
         let t_frame0 = if g_debug { Some(Instant::now()) } else { None };
@@ -560,6 +564,26 @@ fn main() {
         dsp[0].sens_scale = cfg.sensitivity / 100.0;
         if cfg.channels > 1 {
             dsp[1].sens_scale = cfg.sensitivity / 100.0;
+        }
+
+        {
+            let mut sum = 0.0f64;
+            let mut cnt = 0usize;
+            for i in 0..pcl.min(heights[0].len()) {
+                sum += heights[0][i];
+                cnt += 1;
+            }
+            if cfg.channels > 1 {
+                for i in 0..pcr.min(heights[1].len()) {
+                    sum += heights[1][i];
+                    cnt += 1;
+                }
+            }
+            let energy = if cnt > 0 { sum / cnt as f64 } else { 0.0 };
+            let lo = color_to_rgb(&cfg.gradient_low).unwrap_or((255, 255, 255));
+            let hi = color_to_rgb(&cfg.gradient_high).unwrap_or((255, 255, 255));
+            let cv = |(r, g, b): (u32, u32, u32)| (r as u8, g as u8, b as u8);
+            live.update(energy, cv(lo), cv(hi));
         }
 
         let mut need_draw = force_draw || in_settings;
