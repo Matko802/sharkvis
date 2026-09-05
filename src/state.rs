@@ -26,7 +26,7 @@ impl StateWriter {
         }
     }
 
-    pub fn update(&mut self, energy: f64, bass: f64, low: (u8, u8, u8), high: (u8, u8, u8)) {
+    pub fn update(&mut self, energy: f64, bass: f64, left: f64, right: f64, low: (u8, u8, u8), high: (u8, u8, u8)) {
         let now = Instant::now();
         let dt = self
             .last_tick
@@ -58,9 +58,11 @@ impl StateWriter {
         let (r, g, b) = lerp_rgb(low, high, e as f32);
         let (lr, lg, lb) = low;
         let (hr, hg, hb) = high;
+        let l = left.clamp(0.0, 1.0);
+        let rr = right.clamp(0.0, 1.0);
         let body = format!(
-            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x}\n",
-            r, g, b, e, beat, lr, lg, lb, hr, hg, hb
+            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2}\n",
+            r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr
         );
         let tmp = format!("{}.tmp", path);
         if std::fs::write(&tmp, body.as_bytes()).is_ok() {
@@ -539,7 +541,7 @@ mod tests {
         std::env::set_var("SHARKVIS_NO_STATE", "1");
         let mut w = StateWriter::new();
         assert!(w.path.is_none());
-        w.update(0.9, 0.9, (0, 0, 0), (255, 255, 255));
+        w.update(0.9, 0.9, 0.9, 0.9, (0, 0, 0), (255, 255, 255));
         std::env::remove_var("SHARKVIS_NO_STATE");
     }
 
@@ -553,7 +555,7 @@ mod tests {
         w.path = Some(path.clone());
         w.dir_ready = true;
         for _ in 0..5 {
-            w.update(0.5, 0.4, (0, 0, 255), (255, 0, 0));
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0));
             std::thread::sleep(std::time::Duration::from_millis(60));
         }
         let text = std::fs::read_to_string(&path).unwrap();

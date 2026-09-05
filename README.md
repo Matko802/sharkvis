@@ -56,7 +56,7 @@ second to `$XDG_RUNTIME_DIR/sharkvis/state`
 waiting for the settings panel to close:
 
 ```text
-color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000
+color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45
 ```
 
 - `color` — gradient color at the current volume (`#rrggbb`)
@@ -64,6 +64,7 @@ color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000
 - `beat` — beat envelope `0..1`: kicks, snares and other onsets lock
   a tempo grid that keeps pulsing through soft hits, recalibrates on
   tempo changes, and drops after unsupported bars
+- `bass`, `left`, `right` — bass, left and right channel means `0..1`
 
 Files older than ~1s are stale. Set `SHARKVIS_NO_STATE=1` to disable.
 Note: the monitor sees audio only — no song titles or metadata.
