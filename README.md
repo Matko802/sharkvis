@@ -29,6 +29,11 @@ make deps
 make
 sudo make install
 ```
+## Updating it
+
+```sh
+cd sharkvis && git pull && sudo make install
+```
 ## Usage
 
 ```sh
