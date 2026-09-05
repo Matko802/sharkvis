@@ -54,12 +54,11 @@ are saved automatically when you close the panel or quit.
 
 ## Update
 
-Nix flake (updates both `sharkvis` and
-[jefetch](https://github.com/Matko802/jefetch)):
+Nix flake:
 
 ```sh
 cd ~/fish-flake
-nix flake update jefetch sharkvis
+nix flake update sharkvis
 nh os switch -H machine1
 ```
 
@@ -67,7 +66,6 @@ Standalone:
 
 ```sh
 cd sharkvis && git pull && make && sudo make install
-cd ../jefetch && git pull && ./build.sh && sudo make install
 ```
 
 Restart running copies after updating (`q` to quit, relaunch).
