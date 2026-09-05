@@ -20,18 +20,13 @@ Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-vi
 - Pure Rust
 - Uses Musl
 
-## Install (any Linux distro)
+## Install
 
-Static binary, no dependencies (needs a running PulseAudio or PipeWire-pulse
-server for audio capture):
+Needs a running PulseAudio or PipeWire-pulse server for audio capture:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Matko802/sharkvis/main/install.sh | sh
 ```
-
-Or download `sharkvis-linux-x86_64.tar.gz` / `sharkvis-linux-aarch64.tar.gz`
-from [Releases](https://github.com/Matko802/sharkvis/releases) and copy
-`sharkvis` to `/usr/local/bin`. Re-running the command updates.
 
 ## Building
 
