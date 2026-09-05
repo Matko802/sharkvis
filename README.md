@@ -47,6 +47,26 @@ The config file is looked up in `$SHARKVIS_CONFIG`, then
 `~/.config/sharkvis/config`, then `./config`. Settings changed in the panel
 are saved automatically when you close the panel or quit.
 
+## Update
+
+Nix flake (updates both `sharkvis` and
+[jefetch](https://github.com/Matko802/jefetch)):
+
+```sh
+cd ~/fish-flake
+nix flake update jefetch sharkvis
+nh os switch -H machine1
+```
+
+Standalone:
+
+```sh
+cd sharkvis && git pull && ./build.sh && sudo make install
+cd ../jefetch && git pull && ./build.sh && sudo make install
+```
+
+Restart running copies after updating (`q` to quit, relaunch).
+
 ## Live state file (jefetch integration)
 
 While running, sharkvis publishes color, levels and gradients ~20x per
