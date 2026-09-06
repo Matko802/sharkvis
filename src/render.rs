@@ -770,6 +770,48 @@ impl Renderer {
             lines
         };
         let top_s = if max_s == 0 { auto_s } else { max_s.min(auto_s).max(1) };
+        if max_s != 0 {
+            let s = top_s;
+            let lines = wrap_all((region_w / s).max(1));
+            if lines.is_empty() {
+                return (s, lines);
+            }
+            let hs: Vec<usize> =
+                lines.iter().map(|l| Self::line_height(l, &heights) * s).collect();
+            let mut total = lines.len().saturating_sub(1) * s;
+            for h in &hs {
+                total += h;
+            }
+            if total <= rows {
+                return (s, lines);
+            }
+            let mut fi = 0;
+            for (i, line) in lines.iter().enumerate() {
+                if line.contains(&focus) {
+                    fi = i;
+                }
+            }
+            let mut lo = fi;
+            let mut hi = fi;
+            let mut used = hs[fi];
+            loop {
+                let mut grew = false;
+                if hi + 1 < lines.len() && used + s + hs[hi + 1] <= rows {
+                    hi += 1;
+                    used += s + hs[hi];
+                    grew = true;
+                }
+                if lo > 0 && used + s + hs[lo - 1] <= rows {
+                    lo -= 1;
+                    used += s + hs[lo];
+                    grew = true;
+                }
+                if !grew {
+                    break;
+                }
+            }
+            return (s, lines[lo..hi + 1].to_vec());
+        }
         for s in (1..=top_s).rev() {
             let cap_px = (region_w / s).max(1);
             let lines = wrap_all(cap_px);
@@ -1926,6 +1968,33 @@ mod layout_tests {
         assert_eq!(Renderer::layout_text(&[], 80, 24, 0, 0).1.len(), 0);
         assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1, 0).1.len(), 0);
         assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1, 0).1.len(), 0);
+    }
+
+    #[test]
+    fn explicit_size_windows_overflow_keeping_focus() {
+        let text = chars("this is a very long lyric line indeed");
+        let (s, lines) = Renderer::layout_text(&text, 80, 24, 0, 5);
+        assert_eq!(s, 3);
+        let flat: Vec<usize> = lines.concat();
+        assert!(flat.contains(&0));
+        let total_h: usize = lines.len() * 7 * 3 + lines.len().saturating_sub(1) * 3;
+        assert!(total_h <= 24);
+    }
+
+    #[test]
+    fn explicit_size_fits_unchanged() {
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 5);
+        assert_eq!(s, 3);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn auto_still_shrinks_long_lines() {
+        let text = chars("this is a very long lyric line indeed");
+        let (s, lines) = Renderer::layout_text(&text, 80, 24, 0, 0);
+        assert_eq!(s, 1);
+        assert!(lines.len() >= 2);
+        assert!(lines.concat().contains(&0));
     }
 }
 
