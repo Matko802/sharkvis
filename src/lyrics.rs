@@ -349,6 +349,22 @@ fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
     if !url.contains("youtube.com/watch") && !url.contains("youtu.be/") {
         return Vec::new();
     }
+    download_subs(url, cache_path, None)
+}
+
+fn fetch_search_subs(artist: &str, title: &str, duration: f64, cache_path: &str) -> Vec<LyricLine> {
+    let query = format!("ytsearch3:{} {}", artist.trim(), title.trim());
+    let filter = if duration > 30.0 {
+        let lo = (duration - 45.0).max(15.0) as u32;
+        let hi = (duration + 90.0) as u32;
+        Some(format!("duration > {} & duration < {}", lo, hi))
+    } else {
+        None
+    };
+    download_subs(&query, cache_path, filter.as_deref())
+}
+
+fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> Vec<LyricLine> {
     let dir = match std::path::Path::new(cache_path).parent() {
         Some(p) => p.to_string_lossy().into_owned(),
         None => return Vec::new(),
@@ -357,15 +373,25 @@ fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0));
-    let out_tpl = format!("{}/{}.%(ext)s", dir, stem);
-    let _ = cmd_out(
-        "yt-dlp",
-        &[
-            "--skip-download", "--no-playlist", "--write-auto-subs", "--write-subs",
-            "--sub-langs", "en*", "--sub-format", "vtt/best", "-o", &out_tpl, url,
-        ],
-        90000,
-    );
+    let out_tpl = format!("{}/{}.%(id)s.%(ext)s", dir, stem);
+    let mut args = vec![
+        "--skip-download",
+        "--no-playlist",
+        "--write-auto-subs",
+        "--write-subs",
+        "--sub-langs",
+        "en*",
+        "--sub-format",
+        "vtt/best",
+        "-o",
+        &out_tpl,
+    ];
+    if let Some(f) = match_filter {
+        args.push("--match-filter");
+        args.push(f);
+    }
+    args.push(target);
+    let _ = cmd_out("yt-dlp", &args, 90000);
     let mut best = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
@@ -385,7 +411,14 @@ fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
     best
 }
 
-fn fetch_lyrics(artist: &str, title: &str, url: &str, cache_path: &str, local_folder: &str) -> Vec<LyricLine> {
+fn fetch_lyrics(
+    artist: &str,
+    title: &str,
+    url: &str,
+    duration: f64,
+    cache_path: &str,
+    local_folder: &str,
+) -> Vec<LyricLine> {
     if !local_folder.trim().is_empty() {
         if let Some(lines) = scan_local_lrc(local_folder, artist, title) {
             if !lines.is_empty() {
@@ -397,13 +430,95 @@ fn fetch_lyrics(artist: &str, title: &str, url: &str, cache_path: &str, local_fo
     if !synced.is_empty() {
         return synced;
     }
+    if let Some(lines) = fetch_search_synced(artist, title) {
+        if !lines.is_empty() {
+            return lines;
+        }
+    }
     if !url.is_empty() {
         let subs = fetch_subs(url, cache_path);
         if !subs.is_empty() {
             return subs;
         }
     }
+    if !artist.trim().is_empty() && !title.trim().is_empty() {
+        let subs = fetch_search_subs(artist, title, duration, cache_path);
+        if !subs.is_empty() {
+            return subs;
+        }
+        if let Some(lines) = fetch_search_plain(artist, title, duration) {
+            if !lines.is_empty() {
+                return lines;
+            }
+        }
+    }
     Vec::new()
+}
+
+fn fetch_search_synced(artist: &str, title: &str) -> Option<Vec<LyricLine>> {
+    let url = format!(
+        "https://lrclib.net/api/search?q={}%20{}",
+        url_encode(artist),
+        url_encode(title)
+    );
+    let body = cmd_out("curl", &["-fsSL", "-m", "15", &url], 20000)?;
+    for chunk in body.split("{\"id\":").skip(1) {
+        if chunk.contains("\"instrumental\":true") {
+            continue;
+        }
+        if let Some(synced) = json_string(chunk, "syncedLyrics") {
+            if synced.trim().is_empty() {
+                continue;
+            }
+            let lines = parse_lrc(&synced);
+            if !lines.is_empty() {
+                return Some(lines);
+            }
+        }
+    }
+    None
+}
+
+fn distribute_plain(texts: Vec<String>, duration: f64) -> Option<Vec<LyricLine>> {
+    let texts: Vec<String> = texts.into_iter().filter(|l| !l.is_empty()).collect();
+    if texts.len() < 2 || duration < 30.0 {
+        return None;
+    }
+    let step = duration / texts.len() as f64;
+    Some(
+        texts
+            .into_iter()
+            .enumerate()
+            .map(|(i, text)| LyricLine { t: i as f64 * step, text })
+            .collect(),
+    )
+}
+
+fn fetch_search_plain(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
+    if duration < 30.0 {
+        return None;
+    }
+    let url = format!(
+        "https://lrclib.net/api/search?q={}%20{}",
+        url_encode(artist),
+        url_encode(title)
+    );
+    let body = cmd_out("curl", &["-fsSL", "-m", "15", &url], 20000)?;
+    for chunk in body.split("{\"id\":").skip(1) {
+        if chunk.contains("\"instrumental\":true") {
+            continue;
+        }
+        if let Some(plain) = json_string(chunk, "plainLyrics") {
+            let texts: Vec<String> = plain
+                .lines()
+                .map(|l| l.trim().to_string())
+                .collect();
+            if let Some(lines) = distribute_plain(texts, duration) {
+                return Some(lines);
+            }
+        }
+    }
+    None
 }
 
 fn fetch_synced(artist: &str, title: &str) -> Option<Vec<LyricLine>> {
@@ -486,11 +601,12 @@ impl LyricWorker {
         let artist = track.artist.clone();
         let title = track.title.clone();
         let url = track.url.clone();
+        let duration = track.duration;
         let folder = local_folder.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let lines = fetch_lyrics(&artist, &title, &url, &path, &folder);
+            let lines = fetch_lyrics(&artist, &title, &url, duration, &path, &folder);
             if !lines.is_empty() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -739,5 +855,25 @@ mod rolling_tests {
         assert!(out[0].text.contains("gold standard"));
         assert!((out[0].t - 1.75).abs() < 1e-6);
         assert!((out[1].t - 4.43).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod plain_tests {
+    use super::distribute_plain;
+
+    #[test]
+    fn distributes_evenly() {
+        let lines = distribute_plain(
+            vec!["a".to_string(), "b".to_string(), "c".to_string(), "".to_string()],
+            90.0,
+        )
+        .expect("lines");
+        assert_eq!(lines.len(), 3);
+        assert!((lines[0].t - 0.0).abs() < 1e-6);
+        assert!((lines[1].t - 30.0).abs() < 1e-6);
+        assert!((lines[2].t - 60.0).abs() < 1e-6);
+        assert!(distribute_plain(vec!["only".to_string()], 90.0).is_none());
+        assert!(distribute_plain(vec!["a".to_string(), "b".to_string()], 10.0).is_none());
     }
 }
