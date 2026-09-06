@@ -6,7 +6,7 @@
 
 Linux only audio visualizer, now in Rust
 
-Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer) also </sub> </sub>[cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer)</sub>
+Inspired by <sub>[cava](https://github.com/karlstav/cava)</sub> and <sub>[cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer) also </sub> </sub>[LyricsMPRIS-Rust](https://github.com/BEST8OY/LyricsMPRIS-Rust)</sub>
 
 </div>
 
