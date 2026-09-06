@@ -25,9 +25,9 @@ const S_MODE: usize = 12;
 const S_RATE: usize = 13;
 const S_CH: usize = 14;
 const S_CHARSET: usize = 15;
-const S_COUNT: usize = 16;
+const S_TEXT: usize = 16;
+const S_COUNT: usize = 17;
 const S_RESET: usize = S_COUNT;
-const S_ROWS: usize = S_COUNT + 1;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
 const LABELS: [&str; S_COUNT] = [
@@ -47,10 +47,11 @@ const LABELS: [&str; S_COUNT] = [
     "sample rate",
     "channels",
     "charset",
+    "text",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
-const MODES: [&str; 3] = ["bars", "wave", "oscilloscope"];
+const MODES: [&str; 4] = ["bars", "wave", "oscilloscope", "sptlrx"];
 
 fn now_ms() -> i64 {
     static REF: OnceLock<Instant> = OnceLock::new();
@@ -186,7 +187,7 @@ impl SettingsUi {
                         break;
                     }
                 }
-                idx = (idx + dir + 3) % 3;
+                idx = (idx + dir + MODES.len() as i64) % MODES.len() as i64;
                 if cfg.mode != MODES[idx as usize] {
                     cfg.mode = MODES[idx as usize].to_string();
                     *changed |= CH_LAYOUT;
@@ -227,14 +228,44 @@ impl SettingsUi {
         *changed |= CH_LAYOUT | CH_DSP | CH_AUDIO;
     }
 
+    pub fn visible_rows(mode: &str) -> Vec<usize> {
+        let mut rows = vec![S_MODE, S_CMODE, S_GHI, S_GLO, S_FPS, S_RATE, S_CH];
+        match mode {
+            "bars" => rows.extend_from_slice(&[
+                S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
+            ]),
+            "sptlrx" => rows.extend_from_slice(&[S_TEXT, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH]),
+            _ => {}
+        }
+        rows.sort_unstable();
+        rows
+    }
+
+    fn nav_ids(cfg: &Config) -> Vec<usize> {
+        let mut ids = Self::visible_rows(cfg.mode.as_str());
+        ids.push(S_RESET);
+        ids
+    }
+
+    fn clamp_sel(&mut self, cfg: &Config) {
+        let ids = Self::nav_ids(cfg);
+        if !ids.contains(&self.sel) {
+            self.sel = S_MODE;
+        }
+    }
+
     pub fn key(&mut self, cfg: &mut Config, key: i32, cp: Option<&[u8]>, changed: &mut u32) {
         match key {
             KEY_UP => {
-                self.sel = (self.sel + S_ROWS - 1) % S_ROWS;
+                let ids = Self::nav_ids(cfg);
+                let pos = ids.iter().position(|&id| id == self.sel).unwrap_or(0);
+                self.sel = ids[(pos + ids.len() - 1) % ids.len()];
                 self.confirm_reset = false;
             }
             KEY_DOWN => {
-                self.sel = (self.sel + 1) % S_ROWS;
+                let ids = Self::nav_ids(cfg);
+                let pos = ids.iter().position(|&id| id == self.sel).unwrap_or(0);
+                self.sel = ids[(pos + 1) % ids.len()];
                 self.confirm_reset = false;
             }
             KEY_LEFT => {
@@ -243,6 +274,7 @@ impl SettingsUi {
                 } else {
                     Self::adjust(cfg, self.sel, -1, changed);
                 }
+                self.clamp_sel(cfg);
             }
             KEY_RIGHT => {
                 if self.sel == S_RESET {
@@ -250,9 +282,10 @@ impl SettingsUi {
                 } else {
                     Self::adjust(cfg, self.sel, 1, changed);
                 }
+                self.clamp_sel(cfg);
             }
             KEY_ENTER => {
-                if self.sel == S_CHARSET {
+                if self.sel == S_CHARSET || self.sel == S_TEXT {
                     *changed |= CH_EDITOR;
                 }
             }
@@ -267,6 +300,7 @@ impl SettingsUi {
                             Self::adjust(cfg, self.sel, 1, changed);
                         }
                     }
+                    self.clamp_sel(cfg);
                 }
             }
             _ => {}
@@ -277,11 +311,12 @@ impl SettingsUi {
         if self.confirm_reset && now_ms() > self.confirm_deadline_ms {
             self.confirm_reset = false;
         }
+        self.clamp_sel(cfg);
         panel_row(out, cap, 1, pw, "sharkvis settings", None, None);
         panel_row(out, cap, 2, pw, "←, ↑, ↓, → = adjust", None, None);
         panel_row(out, cap, 3, pw, "g = close, q = quit", None, None);
         let mut y = 6;
-        for id in 0..S_COUNT {
+        for id in Self::visible_rows(cfg.mode.as_str()) {
             let val = format_value(cfg, id);
             panel_row(
                 out,
@@ -298,6 +333,8 @@ impl SettingsUi {
             panel_row(out, cap, y, pw, "Are you sure?", Some("press → again"), Some("\x1b[41m\x1b[97m"));
         } else if self.sel == S_CHARSET {
             panel_row(out, cap, y, pw, "edit bar symbols", Some("enter = nano"), None);
+        } else if self.sel == S_TEXT {
+            panel_row(out, cap, y, pw, "edit big text", Some("enter = nano"), None);
         } else {
             panel_row(
                 out,
@@ -357,6 +394,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_RATE => format!("{}", cfg.sample_rate),
         S_CH => format!("{}", cfg.channels),
         S_CHARSET => String::from_utf8_lossy(&cfg.glyphs).into_owned(),
+        S_TEXT => cfg.sptlrx_text.clone(),
         _ => String::new(),
     }
 }
@@ -426,4 +464,48 @@ fn panel_row(
         append_esc(out, cap, b" ");
     }
     append_esc(out, cap, b"\x1b[0m");
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    #[test]
+    fn visible_rows_per_mode() {
+        let bars = SettingsUi::visible_rows("bars");
+        assert!(bars.contains(&S_BARS) && bars.contains(&S_CHARSET) && bars.contains(&S_SENS));
+        assert!(!bars.contains(&S_TEXT));
+        let wave = SettingsUi::visible_rows("wave");
+        assert!(!wave.contains(&S_BARS) && !wave.contains(&S_TEXT) && !wave.contains(&S_SENS));
+        assert!(wave.contains(&S_MODE) && wave.contains(&S_FPS) && wave.contains(&S_RATE));
+        let scope = SettingsUi::visible_rows("oscilloscope");
+        assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXT));
+        let spt = SettingsUi::visible_rows("sptlrx");
+        assert!(spt.contains(&S_TEXT) && spt.contains(&S_SENS));
+        assert!(!spt.contains(&S_BARS) && !spt.contains(&S_CHARSET));
+        for m in ["bars", "wave", "oscilloscope", "sptlrx", "bogus"] {
+            let mut v = SettingsUi::visible_rows(m);
+            let mut s = v.clone();
+            s.sort_unstable();
+            s.dedup();
+            assert_eq!(v.len(), s.len(), "no dupes for {}", m);
+            v = s;
+        }
+    }
+
+    #[test]
+    fn nav_never_lands_offscreen() {
+        let mut cfg = Config::default();
+        cfg.mode = "wave".to_string();
+        let mut ui = SettingsUi::default();
+        ui.sel = S_BARS;
+        ui.clamp_sel(&cfg);
+        assert_eq!(ui.sel, S_MODE);
+        let ids = SettingsUi::nav_ids(&cfg);
+        assert!(ids.contains(&S_RESET));
+        assert!(!ids.contains(&S_BARS));
+        ui.sel = S_MODE;
+        ui.key(&mut cfg, KEY_DOWN, None, &mut 0);
+        assert!(SettingsUi::nav_ids(&cfg).contains(&ui.sel));
+    }
 }

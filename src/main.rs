@@ -223,6 +223,7 @@ fn apply_settings(
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
     rnd.set_glyphs(Some(&cfg.glyphs));
+    rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
     rnd.set_offset(x_off);
     rnd.clear();
@@ -269,6 +270,12 @@ fn clamp_cfg(cfg: &mut Config) {
     }
     if cfg.channels > 2 {
         cfg.channels = 2;
+    }
+    let clean: String = cfg.sptlrx_text.to_ascii_uppercase().chars().take(24).collect();
+    if clean.trim().is_empty() {
+        cfg.sptlrx_text = "SHARKVIS".to_string();
+    } else {
+        cfg.sptlrx_text = clean;
     }
 }
 
@@ -394,6 +401,7 @@ fn main() {
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
     rnd.set_glyphs(Some(&cfg.glyphs));
+    rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
 
     let mut heights: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
@@ -611,7 +619,7 @@ fn main() {
 
         let mut need_draw = force_draw || in_settings;
         if !need_draw {
-            if rnd.mode == RenderMode::Bars {
+            if rnd.mode == RenderMode::Bars || rnd.mode == RenderMode::Sptlrx {
                 for i in 0..pcl {
                     if heights[0][i] < last_h[0][i] - VIS_EPS || heights[0][i] > last_h[0][i] + VIS_EPS
                     {

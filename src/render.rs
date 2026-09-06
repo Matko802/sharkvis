@@ -5,6 +5,7 @@ pub enum RenderMode {
     Bars,
     Wave,
     Oscilloscope,
+    Sptlrx,
 }
 
 pub struct Renderer {
@@ -47,6 +48,7 @@ pub struct Renderer {
     sc_yrow: Vec<i64>,
     sc_lo: Vec<i64>,
     sc_hi: Vec<i64>,
+    sptlrx: Vec<char>,
 }
 
 #[derive(Default)]
@@ -270,6 +272,7 @@ impl Renderer {
             sc_yrow: Vec::new(),
             sc_lo: Vec::new(),
             sc_hi: Vec::new(),
+            sptlrx: "SHARKVIS".chars().collect(),
         };
         r.set_glyphs(None);
         r
@@ -321,8 +324,18 @@ impl Renderer {
             RenderMode::Wave
         } else if name == "oscilloscope" || name == "lissajous" {
             RenderMode::Oscilloscope
+        } else if name == "sptlrx" {
+            RenderMode::Sptlrx
         } else {
             RenderMode::Bars
+        }
+    }
+
+    pub fn set_text(&mut self, s: &str) {
+        let v: Vec<char> = s.chars().take(64).collect();
+        if self.sptlrx != v {
+            self.sptlrx = v;
+            self.clear();
         }
     }
 
@@ -407,8 +420,254 @@ impl Renderer {
         self.db_y1 = if self.rows > 0 { self.rows - 1 } else { 0 };
     }
 
-    fn build_barstrings(&mut self) {
-        let mut bw = if self.bar_width == 0 { 1 } else { self.bar_width };
+    fn block_glyph(c: char) -> [u8; 7] {
+        match c.to_ascii_uppercase() {
+            'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+            'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+            'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+            'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
+            'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+            'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+            'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
+            'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+            'I' => [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+            'J' => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+            'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+            'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+            'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+            'N' => [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+            'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+            'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+            'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+            'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+            'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+            'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+            'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+            'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+            'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11],
+            'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+            'Y' => [0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04],
+            'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+            '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+            '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+            '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+            '3' => [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+            '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+            '5' => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+            '6' => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+            '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+            '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+            '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+            '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+            '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+            ',' => [0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08],
+            '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
+            '?' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+            ':' => [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00],
+            '/' => [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10],
+            '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+            ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+            '+' => [0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00],
+            '*' => [0x00, 0x04, 0x15, 0x0E, 0x15, 0x04, 0x00],
+            '#' => [0x0A, 0x0A, 0x1F, 0x0A, 0x1F, 0x0A, 0x0A],
+            '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
+            '\'' => [0x04, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00],
+            '%' => [0x19, 0x1A, 0x02, 0x04, 0x08, 0x0B, 0x13],
+            '=' => [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00],
+            '[' => [0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E],
+            ']' => [0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E],
+            '|' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+            _ => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        }
+    }
+
+    fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
+        let lo_r = ((self.grad_lo >> 16) & 0xff) as f64;
+        let lo_g = ((self.grad_lo >> 8) & 0xff) as f64;
+        let lo_b = (self.grad_lo & 0xff) as f64;
+        let hi_r = ((self.grad_hi >> 16) & 0xff) as f64;
+        let hi_g = ((self.grad_hi >> 8) & 0xff) as f64;
+        let hi_b = (self.grad_hi & 0xff) as f64;
+        let t = xfrac.clamp(0.0, 1.0);
+        let b = 0.10 + 0.90 * v.clamp(0.0, 1.0);
+        let mix = |l: f64, h: f64| ((l + (h - l) * t) * b + 0.5).clamp(0.0, 255.0) as u32;
+        let (cr, cg, cb) = (mix(lo_r, hi_r), mix(lo_g, hi_g), mix(lo_b, hi_b));
+        let mut o = Vec::with_capacity(20);
+        if self.color_256 {
+            let idx = 16 + 36 * ((cr * 6) / 256) + 6 * ((cg * 6) / 256) + (cb * 6) / 256;
+            o.extend_from_slice(b"\x1b[38;5;");
+            o.extend_from_slice(idx.to_string().as_bytes());
+            o.push(b'm');
+        } else {
+            o.extend_from_slice(b"\x1b[38;2;");
+            o.extend_from_slice(cr.to_string().as_bytes());
+            o.push(b';');
+            o.extend_from_slice(cg.to_string().as_bytes());
+            o.push(b';');
+            o.extend_from_slice(cb.to_string().as_bytes());
+            o.push(b'm');
+        }
+        o
+    }
+
+    fn draw_sptlrx(
+        &mut self,
+        values: &[f64],
+        right: Option<&[f64]>,
+        x_start: usize,
+        region_w: usize,
+        out: &mut Out,
+    ) {
+        let rows = self.rows;
+        let cols = self.cols;
+        if rows == 0 || region_w == 0 {
+            return;
+        }
+        let text = self.sptlrx.clone();
+        let m = text.len();
+        if m == 0 {
+            return;
+        }
+        let mut mags = vec![0.0f64; m];
+        for i in 0..m {
+            let avg = |src: &[f64]| -> f64 {
+                if src.is_empty() {
+                    return 0.0;
+                }
+                let n = src.len();
+                let mut b = (i + 1) * n / m;
+                if b <= i * n / m {
+                    b = i * n / m + 1;
+                }
+                if b > n {
+                    b = n;
+                }
+                let s = &src[i * n / m..b];
+                s.iter().sum::<f64>() / s.len() as f64
+            };
+            let l = avg(values);
+            let r = match right {
+                Some(r) => avg(r),
+                None => l,
+            };
+            mags[i] = (l + r) * 0.5;
+        }
+        let mut s = rows / 7;
+        if s < 1 {
+            s = 1;
+        }
+        while s > 1 && s * (6 * m - 1) > region_w {
+            s -= 1;
+        }
+        let mut skip = 0usize;
+        let mut shown = m;
+        if s * (6 * m - 1) > region_w {
+            shown = (region_w + 1) / 6;
+            if shown < 1 {
+                shown = 1;
+            }
+            if shown > m {
+                shown = m;
+            }
+            skip = (m - shown) / 2;
+        }
+        let strip_w = shown * 6 * s - s;
+        let lead = if strip_w < region_w { (region_w - strip_w) / 2 } else { 0 };
+        let gh = 7 * s;
+        let top = if gh < rows { (rows - gh) / 2 } else { 0 };
+        let x_end = (x_start + region_w).min(cols);
+        let full = self.render_glyph(8).to_vec();
+        for k in 0..shown {
+            let li = skip + k;
+            let mut v = mags[li];
+            if !(v > 0.0) {
+                v = 0.0;
+            } else if v > 1.0 {
+                v = 1.0;
+            }
+            let level = (v * 15.0 + 0.5) as u8;
+            let marker = 64 + level;
+            let glyph = Self::block_glyph(text[li].to_ascii_uppercase());
+            let x0 = x_start + lead + k * 6 * s;
+            let xfrac = (li as f64 + 0.5) / m as f64;
+            let esc = self.letter_color(xfrac, v);
+            let box_w = if k + 1 < shown { 6 * s } else { 5 * s };
+            let mut changed = false;
+            for gr in 0..7 {
+                for pr in 0..s {
+                    let y = top + gr * s + pr;
+                    if y >= rows {
+                        break;
+                    }
+                    for px in 0..box_w {
+                        let x = x0 + px;
+                        if x >= x_end {
+                            break;
+                        }
+                        let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
+                        let want = if on { marker } else { 0 };
+                        if self.prev[y * cols + x] != want {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                continue;
+            }
+            for gr in 0..7 {
+                for pr in 0..s {
+                    let y = top + gr * s + pr;
+                    if y >= rows {
+                        break;
+                    }
+                    seek_cell(y as u32, x0 as u32, out);
+                    out.s(&esc);
+                    for px in 0..box_w {
+                        let x = x0 + px;
+                        if x >= x_end {
+                            break;
+                        }
+                        let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
+                        let want = if on { marker } else { 0 };
+                        let idx = y * cols + x;
+                        self.prev[idx] = want;
+                        if on {
+                            out.s(&full);
+                        } else {
+                            out.s(b" ");
+                        }
+                    }
+                }
+            }
+        }
+        for y in 0..rows {
+            for x in x_start..x_end {
+                let mut in_box = false;
+                if y >= top && y < top + gh {
+                    for k in 0..shown {
+                        let x0 = x_start + lead + k * 6 * s;
+                        let w = if k + 1 < shown { 6 * s } else { 5 * s };
+                        if x >= x0 && x < x0 + w {
+                            in_box = true;
+                            break;
+                        }
+                    }
+                }
+                if in_box {
+                    continue;
+                }
+                let idx = y * cols + x;
+                if self.prev[idx] != 0 {
+                    seek_cell(y as u32, x as u32, out);
+                    out.s(b" ");
+                    self.prev[idx] = 0;
+                }
+            }
+        }
+    }
+
+    fn build_barstrings(&mut self) {        let mut bw = if self.bar_width == 0 { 1 } else { self.bar_width };
         if bw > 8 {
             bw = 8;
         }
@@ -856,6 +1115,7 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
+            RenderMode::Sptlrx => self.draw_sptlrx(values, None, self.x_off, region, &mut o),
             RenderMode::Bars => {
                 self.draw_bars(values, None, self.num_bars, self.num_bars, self.x_off, region, &mut o)
             }
@@ -879,6 +1139,7 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
+            RenderMode::Sptlrx => self.draw_sptlrx(left, Some(right), self.x_off, region, &mut o),
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),
@@ -889,5 +1150,51 @@ impl Renderer {
                 &mut o,
             ),
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_font_shapes() {
+        assert_eq!(Renderer::block_glyph('A'), [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11]);
+        assert_eq!(Renderer::block_glyph('a'), Renderer::block_glyph('A'));
+        assert_eq!(Renderer::block_glyph(' '), [0; 7]);
+        assert_eq!(Renderer::block_glyph('~'), [0; 7]);
+        let e = Renderer::block_glyph('E');
+        assert_eq!(e[0], 0x1F);
+        assert_eq!(e[3], 0x1E);
+    }
+
+    #[test]
+    fn mode_parses_sptlrx() {
+        assert!(Renderer::mode_parse("sptlrx") == RenderMode::Sptlrx);
+        assert!(Renderer::mode_parse("wave") == RenderMode::Wave);
+        assert!(Renderer::mode_parse("nope") == RenderMode::Bars);
+    }
+
+    #[test]
+    fn sptlrx_draws_letters() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("AB");
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        let vals = vec![1.0; 8];
+        let mut out = Vec::new();
+        r.draw_sptlrx(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains('█'), "lit letters must emit full blocks");
+        assert!(out.windows(2).any(|w| w == b"\x1b["));
+    }
+
+    #[test]
+    fn sptlrx_empty_text_draws_nothing() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("");
+        let vals = vec![1.0; 8];
+        let mut out = Vec::new();
+        r.draw_sptlrx(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        assert!(out.is_empty());
     }
 }
