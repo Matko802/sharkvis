@@ -27,9 +27,10 @@ const S_CH: usize = 14;
 const S_CHARSET: usize = 15;
 const S_TEXT: usize = 16;
 const S_TEXTSRC: usize = 17;
-const S_PROVIDER: usize = 18;
-const S_OFFSET: usize = 19;
-const S_COUNT: usize = 20;
+const S_TEXTSIZE: usize = 18;
+const S_PROVIDER: usize = 19;
+const S_OFFSET: usize = 20;
+const S_COUNT: usize = 21;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -52,6 +53,7 @@ const LABELS: [&str; S_COUNT] = [
     "charset",
     "text",
     "text source",
+    "text size",
     "provider",
     "offset ms",
 ];
@@ -248,6 +250,13 @@ impl SettingsUi {
                     *changed |= CH_LAYOUT;
                 }
             }
+            S_TEXTSIZE => {
+                let v = (cfg.text_size as i64 + dir).clamp(0, 5) as u32;
+                if v != cfg.text_size {
+                    cfg.text_size = v;
+                    *changed |= CH_LAYOUT;
+                }
+            }
             _ => {}
         }
     }
@@ -270,7 +279,8 @@ impl SettingsUi {
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
             "text" => rows.extend_from_slice(&[
-                S_TEXT, S_TEXTSRC, S_PROVIDER, S_OFFSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
+                S_TEXT, S_TEXTSRC, S_TEXTSIZE, S_PROVIDER, S_OFFSET, S_SENS, S_AUTO, S_NOISE,
+                S_LOW, S_HIGH,
             ]),
             _ => {}
         }
@@ -433,6 +443,13 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_CHARSET => String::from_utf8_lossy(&cfg.glyphs).into_owned(),
         S_TEXT => cfg.sptlrx_text.clone(),
         S_TEXTSRC => cfg.text_source.clone(),
+        S_TEXTSIZE => {
+            if cfg.text_size == 0 {
+                "auto".to_string()
+            } else {
+                format!("{}", cfg.text_size)
+            }
+        }
         S_PROVIDER => cfg.provider.clone(),
         S_OFFSET => format!("{:+}ms", cfg.lyric_offset_ms),
         _ => String::new(),

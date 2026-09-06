@@ -42,6 +42,7 @@ pub struct Config {
     pub sptlrx_text: String,
     pub text_source: String,
     pub text_align: String,
+    pub text_size: u32,
     pub provider: String,
     pub lyric_offset_ms: i64,
     pub lyrics_folder: String,
@@ -71,6 +72,7 @@ impl Default for Config {
             sptlrx_text: "SHARKVIS".to_string(),
             text_source: "static".to_string(),
             text_align: "center".to_string(),
+            text_size: 1,
             provider: "lrclib".to_string(),
             lyric_offset_ms: 0,
             lyrics_folder: String::new(),
@@ -323,6 +325,11 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                         cfg.text_align = v;
                     }
                 }
+                b"text_size" => {
+                    if let Ok(n) = String::from_utf8_lossy(&val).trim().parse::<u32>() {
+                        cfg.text_size = n.min(5);
+                    }
+                }
                 b"provider" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
                     if v == "genius" {
@@ -384,6 +391,7 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("text = {}\n", cfg.sptlrx_text));
     out.push_str(&format!("text_source = {}\n", cfg.text_source));
     out.push_str(&format!("text_align = {}\n", cfg.text_align));
+    out.push_str(&format!("text_size = {}\n", cfg.text_size));
     out.push_str(&format!("provider = {}\n", cfg.provider));
     out.push_str(&format!("offset_ms = {}\n", cfg.lyric_offset_ms));
     out.push_str("glyphs = ");

@@ -749,6 +749,7 @@ fn main() {
         lyric.update(&track, &cfg.lyrics_folder, cfg.provider == "genius");
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
+        rnd.text_size = cfg.text_size.min(5) as usize;
         if cfg.provider != last_provider {
             last_provider = cfg.provider.clone();
             lyric.poke();

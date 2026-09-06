@@ -52,6 +52,7 @@ pub struct Renderer {
     text_dim: Vec<bool>,
     focus: usize,
     pub text_left: bool,
+    pub text_size: usize,
 }
 
 #[derive(Default)]
@@ -279,6 +280,7 @@ impl Renderer {
             text_dim: Vec::new(),
             focus: 0,
             text_left: false,
+            text_size: 1,
         };
         r.set_glyphs(None);
         r
@@ -598,10 +600,12 @@ impl Renderer {
         region_w: usize,
         rows: usize,
         focus: usize,
+        max_s: usize,
     ) -> (usize, Vec<Vec<usize>>) {
         if chars.is_empty() || region_w == 0 || rows == 0 {
             return (1, Vec::new());
         }
+        let auto_s = (rows / 7).max(1);
         let mut paras: Vec<(usize, Vec<char>)> = Vec::new();
         let mut start = 0;
         for (i, c) in chars.iter().enumerate() {
@@ -623,8 +627,8 @@ impl Renderer {
             }
             lines
         };
-        let max_s = (rows / 7).max(1);
-        for s in (1..=max_s).rev() {
+        let top_s = if max_s == 0 { auto_s } else { max_s.min(auto_s).max(1) };
+        for s in (1..=top_s).rev() {
             let cap = ((region_w + s) / (6 * s)).max(1);
             let lines = wrap_all(cap);
             if lines.is_empty() {
@@ -668,7 +672,8 @@ impl Renderer {
         if m == 0 {
             return;
         }
-        let mut mags = vec![0.0f64; m];
+        let mut mags_l = vec![0.0f64; m];
+        let mut mags_r = vec![0.0f64; m];
         for i in 0..m {
             let avg = |src: &[f64]| -> f64 {
                 if src.is_empty() {
@@ -685,14 +690,13 @@ impl Renderer {
                 let s = &src[i * n / m..b];
                 s.iter().sum::<f64>() / s.len() as f64
             };
-            let l = avg(values);
-            let r = match right {
+            mags_l[i] = avg(values);
+            mags_r[i] = match right {
                 Some(r) => avg(r),
-                None => l,
+                None => mags_l[i],
             };
-            mags[i] = (l + r) * 0.5;
         }
-        let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus);
+        let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size);
         if lines.is_empty() {
             return;
         }
@@ -714,19 +718,28 @@ impl Renderer {
             };
             let y0 = top + li * 8 * s;
             for (k, &ci) in line.iter().enumerate() {
-                let mut v = mags[ci] * if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
-                if !(v > 0.0) {
-                    v = 0.0;
-                } else if v > 1.0 {
-                    v = 1.0;
+                let dim_f = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
+                let mut vl = mags_l[ci] * dim_f;
+                if !(vl > 0.0) {
+                    vl = 0.0;
+                } else if vl > 1.0 {
+                    vl = 1.0;
                 }
-                let level = (v * 15.0 + 0.5) as u8;
-                let marker = 64 + level;
+                let mut vr = mags_r[ci] * dim_f;
+                if !(vr > 0.0) {
+                    vr = 0.0;
+                } else if vr > 1.0 {
+                    vr = 1.0;
+                }
+                let mark_l = 64 + (vl * 15.0 + 0.5) as u8;
+                let mark_r = 64 + (vr * 15.0 + 0.5) as u8;
                 let glyph = Self::block_glyph(text[ci].to_ascii_uppercase());
                 let x0 = x_start + lead + k * 6 * s;
                 let xfrac = (ci as f64 + 0.5) / m as f64;
-                let esc = self.letter_color(xfrac, v);
+                let esc_l = self.letter_color(xfrac, vl);
+                let esc_r = self.letter_color(xfrac, vr);
                 let box_w = if k + 1 < line.len() { 6 * s } else { 5 * s };
+                let half = (5 * s + 1) / 2;
                 boxes.push((x0, y0, box_w));
                 let mut changed = false;
                 for gr in 0..7 {
@@ -741,7 +754,11 @@ impl Renderer {
                                 break;
                             }
                             let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
-                            let want = if on { marker } else { 0 };
+                            let want = if on {
+                                if px < half { mark_l } else { mark_r }
+                            } else {
+                                0
+                            };
                             if self.prev[y * cols + x] != want {
                                 changed = true;
                             }
@@ -758,14 +775,22 @@ impl Renderer {
                             break;
                         }
                         seek_cell(y as u32, x0 as u32, out);
-                        out.s(&esc);
+                        out.s(&esc_l);
                         for px in 0..box_w {
                             let x = x0 + px;
                             if x >= x_end {
                                 break;
                             }
+                            if px == half {
+                                seek_cell(y as u32, x as u32, out);
+                                out.s(&esc_r);
+                            }
                             let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
-                            let want = if on { marker } else { 0 };
+                            let want = if on {
+                                if px < half { mark_l } else { mark_r }
+                            } else {
+                                0
+                            };
                             let idx = y * cols + x;
                             self.prev[idx] = want;
                             if on {
@@ -1323,8 +1348,22 @@ mod tests {
     }
 
     #[test]
-    fn text_empty_text_draws_nothing() {
+    fn text_splits_stereo_halves() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("A");
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        let left = vec![1.0; 8];
+        let right = vec![0.0; 8];
+        let mut out = Vec::new();
+        r.draw_text(&left, Some(&right), 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("\x1b[38;2;128;128;128m"), "loud left half must be bright, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;13;13;13m"), "quiet right half must be dim");
+    }
+
+        #[test]
+    fn text_empty_text_draws_nothing() {        let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("");
         let vals = vec![1.0; 8];
         let mut out = Vec::new();
@@ -1343,15 +1382,25 @@ mod layout_tests {
 
     #[test]
     fn short_text_stays_big_single_line() {
-        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1);
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 0);
         assert_eq!(s, 3);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], vec![0, 1]);
     }
 
     #[test]
+    fn fixed_size_caps_scale() {
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 1);
+        assert_eq!(s, 1);
+        assert_eq!(lines.len(), 1);
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 5);
+        assert_eq!(s, 3);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
     fn long_text_shrinks_before_wrapping() {
-        let (s, lines) = Renderer::layout_text(&chars("HELLO WORLD"), 80, 24, 10);
+        let (s, lines) = Renderer::layout_text(&chars("HELLO WORLD"), 80, 24, 10, 0);
         assert_eq!(lines.len(), 1);
         assert!(s < 3);
         let flat: Vec<usize> = lines.concat();
@@ -1361,7 +1410,7 @@ mod layout_tests {
     #[test]
     fn overflow_wraps_to_two_lines() {
         let text = chars("ONE TWO THREE FOUR");
-        let (s, lines) = Renderer::layout_text(&text, 60, 24, 17);
+        let (s, lines) = Renderer::layout_text(&text, 60, 24, 17, 0);
         assert!(lines.len() >= 2);
         for line in &lines {
             assert!((line.len() * 6 - 1) * s <= 60);
@@ -1374,7 +1423,7 @@ mod layout_tests {
     #[test]
     fn narrow_region_splits_words() {
         let text = chars("AB CD EF");
-        let (s, lines) = Renderer::layout_text(&text, 18, 24, 7);
+        let (s, lines) = Renderer::layout_text(&text, 18, 24, 7, 0);
         assert_eq!(s, 1);
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], vec![0, 1]);
@@ -1384,7 +1433,7 @@ mod layout_tests {
     #[test]
     fn impossible_sizes_keep_focus_visible() {
         let text = chars("ONE TWO THREE FOUR FIVE SIX SEVEN EIGHT");
-        let (_, lines) = Renderer::layout_text(&text, 40, 24, 38);
+        let (_, lines) = Renderer::layout_text(&text, 40, 24, 38, 0);
         let flat: Vec<usize> = lines.concat();
         assert!(flat.contains(&38));
         assert!(flat.len() < text.len());
@@ -1392,8 +1441,8 @@ mod layout_tests {
 
     #[test]
     fn empty_or_zero_is_safe() {
-        assert_eq!(Renderer::layout_text(&[], 80, 24, 0).1.len(), 0);
-        assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1).1.len(), 0);
-        assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&[], 80, 24, 0, 0).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1, 0).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1, 0).1.len(), 0);
     }
 }
