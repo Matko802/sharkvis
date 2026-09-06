@@ -81,6 +81,12 @@ lyrics spread over the track), then YouTube auto-captions via `yt-dlp`
 Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
 whitelists MPRIS players (first playing match wins); empty means any.
 
+Untrusted sources (everything except local files and synced lrclib)
+are cleaned up by a local Ollama model (`fix lyrics` on by default,
+`fix model`, `ollama_host` in config): obvious transcription mistakes
+get fixed, timestamps untouched. Replies that drop lines or share no
+words with the original are thrown away, originals kept.
+
 Text-mode keys (lyrics showing): `s` manual search (`Artist - Title`),
 `l` cycle media player, `r` force lyric reload, `c` left/center align,
 `a` follow on/off, `p` switch provider (lrclib/genius), `+`/`-` nudge

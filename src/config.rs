@@ -45,6 +45,9 @@ pub struct Config {
     pub text_size: u32,
     pub provider: String,
     pub lyric_offset_ms: i64,
+    pub correction: bool,
+    pub correction_model: String,
+    pub ollama_host: String,
     pub lyrics_folder: String,
     pub mpris_players: String,
     pub glyphs: Vec<u8>,
@@ -75,6 +78,9 @@ impl Default for Config {
             text_size: 1,
             provider: "lrclib".to_string(),
             lyric_offset_ms: 0,
+            correction: true,
+            correction_model: "llama3.2".to_string(),
+            ollama_host: "http://localhost:11434".to_string(),
             lyrics_folder: String::new(),
             mpris_players: String::new(),
             glyphs: DEFAULT_GLYPHS.to_vec(),
@@ -341,6 +347,21 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                         cfg.lyric_offset_ms = n.clamp(-10000, 10000);
                     }
                 }
+                b"correction" => {
+                    cfg.correction = geti(&val, 1) != 0;
+                }
+                b"correction_model" => {
+                    let v = String::from_utf8_lossy(&val).into_owned();
+                    if !v.trim().is_empty() {
+                        cfg.correction_model = v;
+                    }
+                }
+                b"ollama_host" => {
+                    let v = String::from_utf8_lossy(&val).into_owned();
+                    if !v.trim().is_empty() {
+                        cfg.ollama_host = v;
+                    }
+                }
                 b"glyphs" => cfg.glyphs = val,
                 _ => {}
             },
@@ -394,6 +415,9 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("text_size = {}\n", cfg.text_size));
     out.push_str(&format!("provider = {}\n", cfg.provider));
     out.push_str(&format!("offset_ms = {}\n", cfg.lyric_offset_ms));
+    out.push_str(&format!("correction = {}\n", if cfg.correction { 1 } else { 0 }));
+    out.push_str(&format!("correction_model = {}\n", cfg.correction_model));
+    out.push_str(&format!("ollama_host = {}\n", cfg.ollama_host));
     out.push_str("glyphs = ");
     let _ = f.write_all(out.as_bytes());
     let _ = f.write_all(&cfg.glyphs);

@@ -19,7 +19,7 @@ mod term;
 use crate::audio::Audio;
 use crate::config::{color_to_rgb, config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
-use crate::lyrics::LyricWorker;
+use crate::lyrics::{FetchOpts, LyricWorker};
 use crate::mpris::{poll_named, poll_position, poll_track, Track};
 use crate::render::{RenderMode, Renderer};
 use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
@@ -749,7 +749,16 @@ fn main() {
                 }
             }
         }
-        lyric.update(&track, &cfg.lyrics_folder, cfg.provider == "genius");
+        lyric.update(
+            &track,
+            &FetchOpts {
+                local_folder: cfg.lyrics_folder.clone(),
+                prefer_genius: cfg.provider == "genius",
+                correct: cfg.correction,
+                model: cfg.correction_model.clone(),
+                host: cfg.ollama_host.clone(),
+            },
+        );
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;

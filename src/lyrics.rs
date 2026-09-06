@@ -639,27 +639,215 @@ fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> 
     best
 }
 
+#[derive(Clone, Default)]
+pub struct FetchOpts {
+    pub local_folder: String,
+    pub prefer_genius: bool,
+    pub correct: bool,
+    pub model: String,
+    pub host: String,
+}
+
+fn json_str(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\r' => o.push_str("\\r"),
+            '\t' => o.push_str("\\t"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+fn norm_words(s: &str) -> Vec<String> {
+    s.to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .map(|w| w.to_string())
+        .collect()
+}
+
+fn shares_word(a: &str, b: &str) -> bool {
+    let bw = norm_words(b);
+    norm_words(a)
+        .iter()
+        .any(|w| w.len() >= 3 && bw.iter().any(|v| v == w))
+}
+
+fn clean_reply_line(line: &str) -> String {
+    let t = line.trim();
+    if (t.starts_with("N:") || t.starts_with("n:")) && !t[2..].trim().is_empty() {
+        return t[2..].trim().to_string();
+    }
+    t.to_string()
+}
+
+fn parse_corrected(reply: &str, expect: usize) -> Option<Vec<String>> {
+    if expect == 0 {
+        return None;
+    }
+    let mut numbered: Vec<(usize, String)> = Vec::new();
+    let mut bare: Vec<String> = Vec::new();
+    for raw in reply.lines() {
+        let line = clean_reply_line(raw);
+        if line.is_empty() {
+            continue;
+        }
+        bare.push(line.clone());
+        if let Some((n, text)) = line.split_once(':') {
+            if let Ok(idx) = n.trim().parse::<usize>() {
+                if idx >= 1 && idx <= expect && !text.trim().is_empty() {
+                    numbered.push((idx, text.trim().to_string()));
+                }
+            }
+        }
+    }
+    if numbered.len() == expect {
+        numbered.sort_by_key(|(i, _)| *i);
+        let mut out = vec![String::new(); expect];
+        for (i, text) in numbered {
+            out[i - 1] = text;
+        }
+        if out.iter().all(|s| !s.is_empty()) {
+            return Some(out);
+        }
+    }
+    if bare.len() == expect {
+        return Some(bare);
+    }
+    None
+}
+
+fn apply_correction(lines: &[LyricLine], reply: &str) -> Option<Vec<LyricLine>> {
+    let fixed = parse_corrected(reply, lines.len())?;
+    let mut out = Vec::with_capacity(lines.len());
+    let mut kept = 0usize;
+    for (orig, text) in lines.iter().zip(fixed.into_iter()) {
+        if !shares_word(&orig.text, &text) {
+            out.push(orig.clone());
+            continue;
+        }
+        kept += 1;
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        let words = if !orig.words.is_empty() && orig.words.len() == tokens.len() {
+            orig.words
+                .iter()
+                .zip(tokens.iter())
+                .map(|(w, t)| LyricWord { t: w.t, text: t.to_string() })
+                .collect()
+        } else if !orig.words.is_empty() && !tokens.is_empty() {
+            let first = orig.words.first().map(|w| w.t).unwrap_or(orig.t);
+            let last = orig.words.last().map(|w| w.t).unwrap_or(orig.t);
+            let span = (last - first).max(0.0);
+            let n = tokens.len();
+            tokens
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| LyricWord {
+                    t: first + span * i as f64 / n as f64,
+                    text: t.to_string(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        out.push(LyricLine { t: orig.t, text, words });
+    }
+    if kept * 2 < lines.len() {
+        return None;
+    }
+    Some(out)
+}
+
+fn correct_lines(
+    lines: Vec<LyricLine>,
+    artist: &str,
+    title: &str,
+    model: &str,
+    host: &str,
+) -> Vec<LyricLine> {
+    if lines.len() < 2 || lines.len() > 150 || model.trim().is_empty() {
+        return lines;
+    }
+    let numbered: String = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| format!("{}: {}\n", i + 1, l.text))
+        .collect();
+    if numbered.len() > 6000 {
+        return lines;
+    }
+    let prompt = format!(
+        "Fix obvious speech-recognition mistakes in these song lyrics by '{}'. \
+        Reply with exactly the same numbered lines in the same order, like this example:\n\
+        1: first line here\n2: second line here\n\
+        Only fix clearly misheard words using the song context. Never add, remove, or reorder lines. \
+        Plain text only, no quotes, no commentary.\n{}",
+        format!("{} - {}", artist.trim(), title.trim()).trim().replace('\'', ""),
+        numbered
+    );
+    let req = format!(
+        "{{\"model\":{},\"prompt\":{},\"stream\":false}}",
+        json_str(model),
+        json_str(&prompt),
+    );
+    let url = format!("{}/api/generate", host.trim_end_matches('/'));
+    let out = match cmd_out(
+        "curl",
+        &["-fsSL", "-m", "120", "-X", "POST", &url, "-H", "Content-Type: application/json", "-d", &req],
+        125000,
+    ) {
+        Some(o) => o,
+        None => return lines,
+    };
+    let reply = match json_string(&out, "response") {
+        Some(r) if !r.trim().is_empty() => r,
+        _ => return lines,
+    };
+    apply_correction(&lines, &reply).unwrap_or(lines)
+}
+
+fn maybe_correct(
+    lines: Vec<LyricLine>,
+    artist: &str,
+    title: &str,
+    opts: &FetchOpts,
+) -> Vec<LyricLine> {
+    if !opts.correct || lines.is_empty() {
+        return lines;
+    }
+    correct_lines(lines, artist, title, &opts.model, &opts.host)
+}
+
 fn fetch_lyrics(
     artist: &str,
     title: &str,
     url: &str,
     duration: f64,
     cache_path: &str,
-    local_folder: &str,
-    prefer_genius: bool,
+    opts: &FetchOpts,
 ) -> Vec<LyricLine> {
-    if !local_folder.trim().is_empty() {
-        if let Some(lines) = scan_local_lrc(local_folder, artist, title) {
+    if !opts.local_folder.trim().is_empty() {
+        if let Some(lines) = scan_local_lrc(&opts.local_folder, artist, title) {
             if !lines.is_empty() {
                 return lines;
             }
         }
     }
     let mut genius_done = false;
-    if prefer_genius {
+    if opts.prefer_genius {
         if let Some(lines) = fetch_genius(artist, title, duration) {
             if !lines.is_empty() {
-                return lines;
+                return maybe_correct(lines, artist, title, opts);
             }
         }
         genius_done = true;
@@ -676,24 +864,24 @@ fn fetch_lyrics(
     if !genius_done {
         if let Some(lines) = fetch_genius(artist, title, duration) {
             if !lines.is_empty() {
-                return lines;
+                return maybe_correct(lines, artist, title, opts);
             }
         }
     }
     if !url.is_empty() {
         let subs = fetch_subs(url, cache_path);
         if !subs.is_empty() {
-            return subs;
+            return maybe_correct(subs, artist, title, opts);
         }
     }
     if !artist.trim().is_empty() && !title.trim().is_empty() {
         let subs = fetch_search_subs(artist, title, duration, cache_path);
         if !subs.is_empty() {
-            return subs;
+            return maybe_correct(subs, artist, title, opts);
         }
         if let Some(lines) = fetch_search_plain(artist, title, duration) {
             if !lines.is_empty() {
-                return lines;
+                return maybe_correct(lines, artist, title, opts);
             }
         }
     }
@@ -931,8 +1119,8 @@ impl LyricWorker {
         self.frozen = None;
     }
 
-    pub fn update(&mut self, track: &Track, local_folder: &str, prefer_genius: bool) {
-        self.update_meta(track, local_folder, prefer_genius);
+    pub fn update(&mut self, track: &Track, opts: &FetchOpts) {
+        self.update_meta(track, opts);
         if track.present {
             self.last_pos = track.position;
             if self.pos_cur.0 == 0.0 && track.position > 0.0 {
@@ -969,7 +1157,7 @@ impl LyricWorker {
         Self::extrapolate(p0, t0, p1, t1, Instant::now())
     }
 
-    fn update_meta(&mut self, track: &Track, local_folder: &str, prefer_genius: bool) {
+    fn update_meta(&mut self, track: &Track, opts: &FetchOpts) {
         if let Some((k, lines)) = self.rx.as_ref().and_then(|r| r.try_recv().ok()) {
             self.rx = None;
             if k == self.key {
@@ -1023,11 +1211,11 @@ impl LyricWorker {
         self.last_attempt = Some(Instant::now());
         let url = track.url.clone();
         let duration = track.duration;
-        let folder = local_folder.to_string();
+        let opts = opts.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let lines = fetch_lyrics(&artist, &title, &url, duration, &path, &folder, prefer_genius);
+            let lines = fetch_lyrics(&artist, &title, &url, duration, &path, &opts);
             if !lines.is_empty() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -1364,7 +1552,7 @@ mod interp_tests {
 
 #[cfg(test)]
 mod port_tests {
-    use super::{extract_lyrics_div, html_entity, levenshtein, sanitize_query, LyricLine};
+    use super::{extract_lyrics_div, html_entity, levenshtein, sanitize_query, FetchOpts, LyricLine};
     use crate::mpris::Track;
 
     fn line(t: f64, text: &str) -> LyricLine {
@@ -1431,7 +1619,7 @@ mod port_tests {
             duration: 0.0,
             url: String::new(),
         };
-        w.update_meta(&track, "", false);
+        w.update_meta(&track, &FetchOpts::default());
         assert!(w.key.starts_with("manual|"));
     }
 }
@@ -1448,5 +1636,76 @@ mod reset_tests {
         w.reset();
         assert!(w.key.is_empty());
         assert!(w.lines.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod correction_tests {
+    use super::{apply_correction, parse_corrected, shares_word, LyricLine, LyricWord};
+
+    fn lines() -> Vec<LyricLine> {
+        vec![
+            LyricLine {
+                t: 1.0,
+                text: "look at the stars".to_string(),
+                words: vec![
+                    LyricWord { t: 1.0, text: "look".to_string() },
+                    LyricWord { t: 1.5, text: "at".to_string() },
+                    LyricWord { t: 2.0, text: "the".to_string() },
+                    LyricWord { t: 2.5, text: "stars".to_string() },
+                ],
+            },
+            LyricLine {
+                t: 5.0,
+                text: "how they shine".to_string(),
+                words: vec![
+                    LyricWord { t: 5.0, text: "how".to_string() },
+                    LyricWord { t: 5.5, text: "they".to_string() },
+                    LyricWord { t: 6.0, text: "shine".to_string() },
+                ],
+            },
+        ]
+    }
+
+    #[test]
+    fn parses_numbered_and_bare_replies() {
+        assert_eq!(
+            parse_corrected("1: hello world\n2: foo bar\n", 2),
+            Some(vec!["hello world".to_string(), "foo bar".to_string()])
+        );
+        assert_eq!(
+            parse_corrected("hello world\nfoo bar\n", 2),
+            Some(vec!["hello world".to_string(), "foo bar".to_string()])
+        );
+        assert_eq!(
+            parse_corrected("N: hello world\nN: foo bar\n", 2),
+            Some(vec!["hello world".to_string(), "foo bar".to_string()])
+        );
+        assert_eq!(parse_corrected("1: only one\n", 2), None);
+        assert_eq!(parse_corrected("", 2), None);
+    }
+
+    #[test]
+    fn shares_word_needs_meat() {
+        assert!(shares_word("look at the stars", "look at the stars!"));
+        assert!(shares_word("never gonna give", "never gonna give you up"));
+        assert!(!shares_word("totally different", "nothing alike here"));
+        assert!(!shares_word("a", "a"));
+    }
+
+    #[test]
+    fn keeps_good_lines_rejects_bad() {
+        let reply = "1: look at the stars\n2: purple monkey dishwasher\n";
+        let out = apply_correction(&lines(), reply).expect("mixed");
+        assert_eq!(out[0].text, "look at the stars");
+        assert_eq!(out[1].text, "how they shine");
+        assert_eq!(out[0].words.len(), 4);
+        assert!((out[0].words[3].t - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rejects_garbage_replies() {
+        assert!(apply_correction(&lines(), "1: xyzzy\n2: plugh\n").is_none());
+        assert!(apply_correction(&lines(), "1: only\n").is_none());
     }
 }
