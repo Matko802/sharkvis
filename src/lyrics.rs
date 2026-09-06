@@ -1245,10 +1245,7 @@ mod interp_tests {
 
 #[cfg(test)]
 mod port_tests {
-    use super::{
-        dedup_rolling, distribute_plain, extract_lyrics_div, fuzzy_score, html_entity,
-        levenshtein, normalize_name, sanitize_query, LyricLine,
-    };
+    use super::{extract_lyrics_div, html_entity, levenshtein, sanitize_query, LyricLine};
     use crate::mpris::Track;
 
     fn line(t: f64, text: &str) -> LyricLine {
