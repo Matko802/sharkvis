@@ -5,7 +5,8 @@ pub enum RenderMode {
     Bars,
     Wave,
     Oscilloscope,
-    Sptlrx,
+    Text,
+    Ai,
 }
 
 pub struct Renderer {
@@ -48,7 +49,7 @@ pub struct Renderer {
     sc_yrow: Vec<i64>,
     sc_lo: Vec<i64>,
     sc_hi: Vec<i64>,
-    sptlrx: Vec<char>,
+    text: Vec<char>,
 }
 
 #[derive(Default)]
@@ -272,7 +273,7 @@ impl Renderer {
             sc_yrow: Vec::new(),
             sc_lo: Vec::new(),
             sc_hi: Vec::new(),
-            sptlrx: "SHARKVIS".chars().collect(),
+            text: "SHARKVIS".chars().collect(),
         };
         r.set_glyphs(None);
         r
@@ -324,8 +325,10 @@ impl Renderer {
             RenderMode::Wave
         } else if name == "oscilloscope" || name == "lissajous" {
             RenderMode::Oscilloscope
-        } else if name == "sptlrx" {
-            RenderMode::Sptlrx
+        } else if name == "text" {
+            RenderMode::Text
+        } else if name == "ai" {
+            RenderMode::Ai
         } else {
             RenderMode::Bars
         }
@@ -333,8 +336,8 @@ impl Renderer {
 
     pub fn set_text(&mut self, s: &str) {
         let v: Vec<char> = s.chars().take(64).collect();
-        if self.sptlrx != v {
-            self.sptlrx = v;
+        if self.text != v {
+            self.text = v;
             self.clear();
         }
     }
@@ -510,7 +513,7 @@ impl Renderer {
         o
     }
 
-    fn draw_sptlrx(
+    fn draw_text(
         &mut self,
         values: &[f64],
         right: Option<&[f64]>,
@@ -523,7 +526,7 @@ impl Renderer {
         if rows == 0 || region_w == 0 {
             return;
         }
-        let text = self.sptlrx.clone();
+        let text = self.text.clone();
         let m = text.len();
         if m == 0 {
             return;
@@ -1115,7 +1118,8 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Sptlrx => self.draw_sptlrx(values, None, self.x_off, region, &mut o),
+            RenderMode::Text => self.draw_text(values, None, self.x_off, region, &mut o),
+            RenderMode::Ai => self.draw_text(values, None, self.x_off, region, &mut o),
             RenderMode::Bars => {
                 self.draw_bars(values, None, self.num_bars, self.num_bars, self.x_off, region, &mut o)
             }
@@ -1139,7 +1143,8 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Sptlrx => self.draw_sptlrx(left, Some(right), self.x_off, region, &mut o),
+            RenderMode::Text => self.draw_text(left, Some(right), self.x_off, region, &mut o),
+            RenderMode::Ai => self.draw_text(left, Some(right), self.x_off, region, &mut o),
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),
@@ -1168,33 +1173,33 @@ mod tests {
     }
 
     #[test]
-    fn mode_parses_sptlrx() {
-        assert!(Renderer::mode_parse("sptlrx") == RenderMode::Sptlrx);
+    fn mode_parses_text() {
+        assert!(Renderer::mode_parse("text") == RenderMode::Text);
         assert!(Renderer::mode_parse("wave") == RenderMode::Wave);
         assert!(Renderer::mode_parse("nope") == RenderMode::Bars);
     }
 
     #[test]
-    fn sptlrx_draws_letters() {
+    fn text_draws_letters() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
         let vals = vec![1.0; 8];
         let mut out = Vec::new();
-        r.draw_sptlrx(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains('█'), "lit letters must emit full blocks");
         assert!(out.windows(2).any(|w| w == b"\x1b["));
     }
 
     #[test]
-    fn sptlrx_empty_text_draws_nothing() {
+    fn text_empty_text_draws_nothing() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("");
         let vals = vec![1.0; 8];
         let mut out = Vec::new();
-        r.draw_sptlrx(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(out.is_empty());
     }
 }

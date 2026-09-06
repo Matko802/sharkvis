@@ -26,7 +26,10 @@ const S_RATE: usize = 13;
 const S_CH: usize = 14;
 const S_CHARSET: usize = 15;
 const S_TEXT: usize = 16;
-const S_COUNT: usize = 17;
+const S_TEXTSRC: usize = 17;
+const S_AIMODEL: usize = 18;
+const S_SPEECH: usize = 19;
+const S_COUNT: usize = 20;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -48,10 +51,13 @@ const LABELS: [&str; S_COUNT] = [
     "channels",
     "charset",
     "text",
+    "text source",
+    "ai model",
+    "speech",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
-const MODES: [&str; 4] = ["bars", "wave", "oscilloscope", "sptlrx"];
+const MODES: [&str; 5] = ["bars", "wave", "oscilloscope", "text", "ai"];
 
 fn now_ms() -> i64 {
     static REF: OnceLock<Instant> = OnceLock::new();
@@ -213,6 +219,20 @@ impl SettingsUi {
                     *changed |= CH_AUDIO;
                 }
             }
+            S_TEXTSRC => {
+                let v = if cfg.text_source == "lyrics" {
+                    "static".to_string()
+                } else {
+                    "lyrics".to_string()
+                };
+                if v != cfg.text_source {
+                    cfg.text_source = v;
+                    *changed |= CH_LAYOUT;
+                }
+            }
+            S_SPEECH => {
+                cfg.speech = !cfg.speech;
+            }
             _ => {}
         }
     }
@@ -234,7 +254,10 @@ impl SettingsUi {
             "bars" => rows.extend_from_slice(&[
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
-            "sptlrx" => rows.extend_from_slice(&[S_TEXT, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH]),
+            "text" => rows.extend_from_slice(&[
+                S_TEXT, S_TEXTSRC, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
+            ]),
+            "ai" => rows.extend_from_slice(&[S_AIMODEL, S_SPEECH]),
             _ => {}
         }
         rows.sort_unstable();
@@ -285,7 +308,7 @@ impl SettingsUi {
                 self.clamp_sel(cfg);
             }
             KEY_ENTER => {
-                if self.sel == S_CHARSET || self.sel == S_TEXT {
+                if self.sel == S_CHARSET || self.sel == S_TEXT || self.sel == S_AIMODEL {
                     *changed |= CH_EDITOR;
                 }
             }
@@ -395,6 +418,15 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_CH => format!("{}", cfg.channels),
         S_CHARSET => String::from_utf8_lossy(&cfg.glyphs).into_owned(),
         S_TEXT => cfg.sptlrx_text.clone(),
+        S_TEXTSRC => cfg.text_source.clone(),
+        S_AIMODEL => cfg.ai_model.clone(),
+        S_SPEECH => {
+            if cfg.speech {
+                "on".to_string()
+            } else {
+                "off".to_string()
+            }
+        }
         _ => String::new(),
     }
 }
@@ -480,10 +512,14 @@ mod tests {
         assert!(wave.contains(&S_MODE) && wave.contains(&S_FPS) && wave.contains(&S_RATE));
         let scope = SettingsUi::visible_rows("oscilloscope");
         assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXT));
-        let spt = SettingsUi::visible_rows("sptlrx");
-        assert!(spt.contains(&S_TEXT) && spt.contains(&S_SENS));
-        assert!(!spt.contains(&S_BARS) && !spt.contains(&S_CHARSET));
-        for m in ["bars", "wave", "oscilloscope", "sptlrx", "bogus"] {
+        let spt = SettingsUi::visible_rows("text");
+        assert!(spt.contains(&S_TEXT) && spt.contains(&S_TEXTSRC) && spt.contains(&S_SENS));
+        assert!(!spt.contains(&S_BARS) && !spt.contains(&S_CHARSET) && !spt.contains(&S_AIMODEL));
+        let ai = SettingsUi::visible_rows("ai");
+        assert!(ai.contains(&S_AIMODEL) && ai.contains(&S_SPEECH));
+        assert!(!ai.contains(&S_BARS) && !ai.contains(&S_TEXT) && !ai.contains(&S_SENS));
+        assert!(ai.contains(&S_MODE) && ai.contains(&S_FPS));
+        for m in ["bars", "wave", "oscilloscope", "text", "ai", "bogus"] {
             let mut v = SettingsUi::visible_rows(m);
             let mut s = v.clone();
             s.sort_unstable();

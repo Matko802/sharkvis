@@ -4,19 +4,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod ai;
 mod audio;
 mod config;
 mod dsp;
 mod fft;
+mod lyrics;
+mod mpris;
 mod pulse;
 mod render;
 mod settings;
 mod state;
 mod term;
 
+use crate::ai::AiWorker;
 use crate::audio::Audio;
 use crate::config::{color_to_rgb, config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
+use crate::lyrics::LyricWorker;
+use crate::mpris::{poll_track, Track};
 use crate::render::{RenderMode, Renderer};
 use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
@@ -271,6 +277,15 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.channels > 2 {
         cfg.channels = 2;
     }
+    if cfg.text_source != "lyrics" {
+        cfg.text_source = "static".to_string();
+    }
+    if cfg.ai_model.trim().is_empty() {
+        cfg.ai_model = "deepseek-r1:14b".to_string();
+    }
+    if cfg.ollama_host.trim().is_empty() {
+        cfg.ollama_host = "http://localhost:11434".to_string();
+    }
     let clean: String = cfg.sptlrx_text.to_ascii_uppercase().chars().take(24).collect();
     if clean.trim().is_empty() {
         cfg.sptlrx_text = "SHARKVIS".to_string();
@@ -412,6 +427,11 @@ fn main() {
     let mut in_settings = false;
     let mut force_draw = true;
     let mut chmask: u32 = 0;
+    let mut lyric = LyricWorker::new();
+    let mut aiw = AiWorker::new();
+    let mut track = Track::default();
+    let mut last_track_poll = Instant::now();
+    let mut last_ai_shown = String::new();
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
@@ -617,9 +637,40 @@ fn main() {
             live.update(energy, bass, left, right, cv(lo), cv(hi));
         }
 
+        if last_track_poll.elapsed() >= Duration::from_millis(500) {
+            last_track_poll = Instant::now();
+            track = poll_track();
+        }
+        lyric.update(&track);
+        aiw.update(
+            rnd.mode == RenderMode::Ai,
+            &track,
+            &cfg.ai_model,
+            &cfg.ollama_host,
+            cfg.speech,
+        );
+        if rnd.mode == RenderMode::Text {
+            let s = if cfg.text_source == "lyrics" {
+                lyric.display(&track, &cfg.sptlrx_text)
+            } else {
+                cfg.sptlrx_text.clone()
+            };
+            rnd.set_text(&s);
+        } else if rnd.mode == RenderMode::Ai {
+            let s = aiw.display();
+            if s != last_ai_shown {
+                last_ai_shown = s.to_string();
+                force_draw = true;
+            }
+            rnd.set_text(s);
+        }
+
         let mut need_draw = force_draw || in_settings;
         if !need_draw {
-            if rnd.mode == RenderMode::Bars || rnd.mode == RenderMode::Sptlrx {
+            if rnd.mode == RenderMode::Bars
+                || rnd.mode == RenderMode::Text
+                || rnd.mode == RenderMode::Ai
+            {
                 for i in 0..pcl {
                     if heights[0][i] < last_h[0][i] - VIS_EPS || heights[0][i] > last_h[0][i] + VIS_EPS
                     {
