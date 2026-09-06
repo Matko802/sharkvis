@@ -735,6 +735,9 @@ fn main() {
                 track = fresh;
             } else {
                 track.present = false;
+                if !crate::mpris::any_active_player() {
+                    lyric.reset();
+                }
             }
         }
         if last_pos_poll.elapsed() >= Duration::from_millis(200) {

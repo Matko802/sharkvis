@@ -823,8 +823,7 @@ impl LyricWorker {
         self.key = String::new();
     }
 
-    pub fn force_reload(&mut self) {
-        self.lines.clear();
+    pub fn force_reload(&mut self) {        self.lines.clear();
         self.rx = None;
         self.last_attempt = None;
         if !self.key.is_empty() {
@@ -836,6 +835,14 @@ impl LyricWorker {
 
     pub fn poke(&mut self) {
         self.last_attempt = None;
+    }
+
+    pub fn reset(&mut self) {
+        self.key.clear();
+        self.lines.clear();
+        self.rx = None;
+        self.last_attempt = None;
+        self.frozen = None;
     }
 
     pub fn update(&mut self, track: &Track, local_folder: &str, prefer_genius: bool) {
@@ -1314,5 +1321,20 @@ mod port_tests {
         };
         w.update_meta(&track, "", false);
         assert!(w.key.starts_with("manual|"));
+    }
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::LyricWorker;
+
+    #[test]
+    fn reset_clears_to_static() {
+        let mut w = LyricWorker::new();
+        w.key = "a|b".to_string();
+        w.update_pos(12.0);
+        w.reset();
+        assert!(w.key.is_empty());
+        assert!(w.lines.is_empty());
     }
 }
