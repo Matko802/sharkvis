@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 libc = "0.2"
 rustfft = "6.4.1"
+unifont = "1.1.0"
 
 [profile.release]
 opt-level = 3

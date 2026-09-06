@@ -8,6 +8,12 @@ pub enum RenderMode {
     Text,
 }
 
+enum BigGlyph {
+    Block([u8; 7]),
+    Uni(&'static unifont::Glyph),
+    Blank,
+}
+
 pub struct Renderer {
     pub rows: usize,
     pub cols: usize,
@@ -526,6 +532,90 @@ impl Renderer {
         }
     }
 
+    fn base_latin(c: char) -> Option<char> {
+        Some(match c {
+            'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'à' | 'á' | 'â' | 'ã' | 'ä' | 'å'
+            | 'Ā' | 'ā' | 'Ă' | 'ă' | 'Ą' | 'ą' => 'A',
+            'Ç' | 'ç' | 'Ć' | 'ć' | 'Ĉ' | 'ĉ' | 'Ċ' | 'ċ' | 'Č' | 'č' => 'C',
+            'Ð' | 'ð' | 'Ď' | 'ď' | 'Đ' | 'đ' => 'D',
+            'È' | 'É' | 'Ê' | 'Ë' | 'è' | 'é' | 'ê' | 'ë' | 'Ē' | 'ē' | 'Ĕ' | 'ĕ'
+            | 'Ė' | 'ė' | 'Ę' | 'ę' | 'Ě' | 'ě' => 'E',
+            'Ĝ' | 'ĝ' | 'Ğ' | 'ğ' | 'Ġ' | 'ġ' | 'Ģ' | 'ģ' => 'G',
+            'Ĥ' | 'ĥ' | 'Ħ' | 'ħ' => 'H',
+            'Ì' | 'Í' | 'Î' | 'Ï' | 'ì' | 'í' | 'î' | 'ï' | 'Ĩ' | 'ĩ' | 'Ī' | 'ī'
+            | 'Ĭ' | 'ĭ' | 'Į' | 'į' | 'İ' => 'I',
+            'Ĵ' | 'ĵ' => 'J',
+            'Ķ' | 'ķ' | 'ĸ' => 'K',
+            'Ĺ' | 'ĺ' | 'Ļ' | 'ļ' | 'Ľ' | 'ľ' | 'Ŀ' | 'ŀ' | 'Ł' | 'ł' => 'L',
+            'Ñ' | 'ñ' | 'Ń' | 'ń' | 'Ņ' | 'ņ' | 'Ň' | 'ň' => 'N',
+            'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø'
+            | 'Ō' | 'ō' | 'Ŏ' | 'ŏ' | 'Ő' | 'ő' => 'O',
+            'Ŕ' | 'ŕ' | 'Ŗ' | 'ŗ' | 'Ř' | 'ř' => 'R',
+            'Ś' | 'ś' | 'Ŝ' | 'ŝ' | 'Ş' | 'ş' | 'Š' | 'š' => 'S',
+            'Ţ' | 'ţ' | 'Ť' | 'ť' | 'Ŧ' | 'ŧ' => 'T',
+            'Ù' | 'Ú' | 'Û' | 'Ü' | 'ù' | 'ú' | 'û' | 'ü' | 'Ũ' | 'ũ' | 'Ū' | 'ū'
+            | 'Ŭ' | 'ŭ' | 'Ů' | 'ů' | 'Ű' | 'ű' | 'Ų' | 'ų' => 'U',
+            'Ŵ' | 'ŵ' => 'W',
+            'Ý' | 'ý' | 'ÿ' | 'Ŷ' | 'ŷ' => 'Y',
+            'Ź' | 'ź' | 'Ż' | 'ż' | 'Ž' | 'ž' => 'Z',
+            'Þ' | 'þ' => 'P',
+            _ => return None,
+        })
+    }
+
+    fn resolve_glyph(c: char) -> (BigGlyph, usize, usize) {
+        let g = Self::block_glyph(c);
+        if c == ' ' || g.iter().any(|&r| r != 0) {
+            return (BigGlyph::Block(g), 5, 7);
+        }
+        if let Some(b) = Self::base_latin(c) {
+            return (BigGlyph::Block(Self::block_glyph(b)), 5, 7);
+        }
+        match unifont::get_glyph(c) {
+            Some(gl) => {
+                let w = gl.get_width();
+                (BigGlyph::Uni(gl), w, 16)
+            }
+            None => (BigGlyph::Blank, 5, 7),
+        }
+    }
+
+    fn glyph_wh(c: char) -> (usize, usize) {
+        let (_, w, h) = Self::resolve_glyph(c);
+        (w, h)
+    }
+
+    fn glyph_on(g: &BigGlyph, x: usize, y: usize, h: usize) -> bool {
+        match g {
+            BigGlyph::Block(rows) => {
+                let oy = h.saturating_sub(7) / 2;
+                if y < oy || y >= oy + 7 || x >= 5 {
+                    return false;
+                }
+                (rows[y - oy] >> (4 - x)) & 1 == 1
+            }
+            BigGlyph::Uni(gl) => gl.get_pixel(x, y),
+            BigGlyph::Blank => false,
+        }
+    }
+
+    fn cell_width(c: char) -> usize {
+        if c.is_ascii() {
+            return 1;
+        }
+        match c as u32 {
+            0x1100..=0x115F
+            | 0x2E80..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x20000..=0x3FFFD => 2,
+            _ => 1,
+        }
+    }
+
     fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
         let lo_r = ((self.grad_lo >> 16) & 0xff) as f64;
         let lo_g = ((self.grad_lo >> 8) & 0xff) as f64;
@@ -555,10 +645,16 @@ impl Renderer {
         o
     }
 
-    fn wrap_chars(chars: &[char], cap: usize) -> Vec<Vec<usize>> {
-        let cap = cap.max(1);
+    fn wrap_chars(
+        chars: &[char],
+        widths: &[usize],
+        base: usize,
+        cap_px: usize,
+    ) -> Vec<Vec<usize>> {
+        let cap_px = cap_px.max(1);
         let mut lines: Vec<Vec<usize>> = Vec::new();
         let mut cur: Vec<usize> = Vec::new();
+        let mut used = 0usize;
         let mut i = 0;
         while i < chars.len() {
             let mut sep = None;
@@ -573,27 +669,56 @@ impl Renderer {
             while j < chars.len() && chars[j] != ' ' {
                 j += 1;
             }
-            if !cur.is_empty() && cur.len() + 1 + (j - i) > cap {
+            let mut ww = 0usize;
+            for t in i..j {
+                ww += widths[base + t] + 1;
+            }
+            ww = ww.saturating_sub(1);
+            let sep_w = sep.map(|t| widths[base + t]).unwrap_or(0);
+            let need = if cur.is_empty() { ww } else { 1 + sep_w + ww };
+            if !cur.is_empty() && used + need > cap_px {
                 lines.push(std::mem::take(&mut cur));
+                used = 0;
             }
             if cur.is_empty() {
-                if j - i <= cap {
+                if ww <= cap_px {
                     cur.extend(i..j);
+                    used = ww;
                 } else {
                     let mut k = i;
                     while k < j {
-                        if cur.len() >= cap {
-                            lines.push(std::mem::take(&mut cur));
+                        let mut cw = 0usize;
+                        let mut e = k;
+                        while e < j {
+                            let add = widths[base + e] + if e > k { 1 } else { 0 };
+                            if cw + add > cap_px {
+                                break;
+                            }
+                            cw += add;
+                            e += 1;
                         }
-                        cur.push(k);
-                        k += 1;
+                        if e == k {
+                            e = k + 1;
+                            cw = widths[base + k];
+                        }
+                        cur.extend(k..e);
+                        k = e;
+                        if k < j {
+                            lines.push(std::mem::take(&mut cur));
+                            used = 0;
+                        } else {
+                            used = cw;
+                        }
                     }
                 }
             } else if let Some(s) = sep {
                 cur.push(s);
+                used += 1 + sep_w;
                 cur.extend(i..j);
+                used += 1 + ww;
             } else {
                 cur.extend(i..j);
+                used += 1 + ww;
             }
             i = j;
         }
@@ -601,6 +726,14 @@ impl Renderer {
             lines.push(cur);
         }
         lines
+    }
+
+    fn line_height(line: &[usize], heights: &[usize]) -> usize {
+        let mut h = 7;
+        for &idx in line {
+            h = h.max(heights[idx]);
+        }
+        h
     }
 
     fn layout_text(
@@ -623,10 +756,17 @@ impl Renderer {
             }
         }
         paras.push((start, chars[start..].to_vec()));
-        let wrap_all = |cap: usize| -> Vec<Vec<usize>> {
+        let mut widths = vec![5usize; chars.len()];
+        let mut heights = vec![7usize; chars.len()];
+        for (i, c) in chars.iter().enumerate() {
+            let (w, h) = Self::glyph_wh(*c);
+            widths[i] = w;
+            heights[i] = h;
+        }
+        let wrap_all = |cap_px: usize| -> Vec<Vec<usize>> {
             let mut lines = Vec::new();
             for (base, pc) in paras.iter() {
-                for mut line in Self::wrap_chars(pc, cap) {
+                for mut line in Self::wrap_chars(pc, &widths, *base, cap_px) {
                     for idx in line.iter_mut() {
                         *idx += *base;
                     }
@@ -637,17 +777,20 @@ impl Renderer {
         };
         let top_s = if max_s == 0 { auto_s } else { max_s.min(auto_s).max(1) };
         for s in (1..=top_s).rev() {
-            let cap = ((region_w + s) / (6 * s)).max(1);
-            let lines = wrap_all(cap);
+            let cap_px = (region_w / s).max(1);
+            let lines = wrap_all(cap_px);
             if lines.is_empty() {
                 continue;
             }
-            let need_h = lines.len() * 7 * s + lines.len().saturating_sub(1) * s;
+            let mut need_h = lines.len().saturating_sub(1) * s;
+            for line in &lines {
+                need_h += Self::line_height(line, &heights) * s;
+            }
             if need_h <= rows {
                 return (s, lines);
             }
         }
-        let lines = wrap_all(((region_w + 1) / 6).max(1));
+        let lines = wrap_all(region_w.max(1));
         let keep = (rows / 8).max(1);
         if lines.len() <= keep {
             return (1, lines);
@@ -772,7 +915,19 @@ impl Renderer {
             }
             let mut k = 0;
             while k < p.len() {
-                let end = (k + region_w).min(p.len());
+                let mut cells = 0usize;
+                let mut end = k;
+                while end < p.len() {
+                    let cw = Self::cell_width(p[end]);
+                    if end > k && cells + cw > region_w {
+                        break;
+                    }
+                    cells += cw;
+                    end += 1;
+                }
+                if end == k {
+                    end = k + 1;
+                }
                 lines.push(&p[k..end]);
                 k = end;
             }
@@ -789,21 +944,27 @@ impl Renderer {
             if y >= rows {
                 break;
             }
-            let len = line.len().min(region_w);
+            let cells: usize = line.iter().map(|&c| Self::cell_width(c)).sum();
             let x0 = if self.text_left {
                 x_start
             } else {
-                x_start + region_w.saturating_sub(len) / 2
+                x_start + region_w.saturating_sub(cells) / 2
             };
-            boxes.push((x0, y, len.min(x_end.saturating_sub(x0))));
+            boxes.push((x0, y, cells.min(x_end.saturating_sub(x0))));
             let mut changed = false;
-            for (px, _) in line.iter().take(len).enumerate() {
-                let x = x0 + px;
-                if x >= x_end {
-                    break;
+            let mut cx = x0;
+            for c in line.iter() {
+                for _ in 0..Self::cell_width(*c) {
+                    if cx >= x_end {
+                        break;
+                    }
+                    if self.prev[y * cols + cx] != marker {
+                        changed = true;
+                        break;
+                    }
+                    cx += 1;
                 }
-                if self.prev[y * cols + x] != marker {
-                    changed = true;
+                if changed || cx >= x_end {
                     break;
                 }
             }
@@ -812,12 +973,18 @@ impl Renderer {
             }
             seek_cell(y as u32, x0 as u32, out);
             out.s(&esc);
-            for (px, c) in line.iter().take(len).enumerate() {
-                let x = x0 + px;
-                if x >= x_end {
+            let mut cx = x0;
+            for c in line.iter() {
+                if cx >= x_end {
                     break;
                 }
-                self.prev[y * cols + x] = marker;
+                for _ in 0..Self::cell_width(*c) {
+                    if cx >= x_end {
+                        break;
+                    }
+                    self.prev[y * cols + cx] = marker;
+                    cx += 1;
+                }
                 out.s(c.encode_utf8(&mut enc).as_bytes());
             }
         }
@@ -867,28 +1034,46 @@ impl Renderer {
         if lines.is_empty() {
             return;
         }
-        let total_h = lines.len() * 7 * s + lines.len().saturating_sub(1) * s;
+        let mut heights = vec![7usize; m];
+        for (i, c) in text.iter().enumerate() {
+            heights[i] = Self::glyph_wh(*c).1;
+        }
+        let mut total_h = lines.len().saturating_sub(1) * s;
+        for line in &lines {
+            total_h += Self::line_height(line, &heights) * s;
+        }
         let top = rows.saturating_sub(total_h) / 2;
         let x_end = (x_start + region_w).min(cols);
         let full = self.render_glyph(8).to_vec();
         let dim = self.text_dim.clone();
-        let mut boxes: Vec<(usize, usize, usize)> = Vec::new();
-        for (li, line) in lines.iter().enumerate() {
+        let mut boxes: Vec<(usize, usize, usize, usize)> = Vec::new();
+        let mut y0 = top;
+        for line in lines.iter() {
             if line.is_empty() {
                 continue;
             }
-            let wline = line.len() * 6 * s - s;
+            let mut gs: Vec<(BigGlyph, usize, usize)> = Vec::with_capacity(line.len());
+            let mut lw = 0usize;
+            let mut lh = 7usize;
+            for &ci in line {
+                let (g, w, h) = Self::resolve_glyph(text[ci]);
+                lw += w + 1;
+                lh = lh.max(h);
+                gs.push((g, w, h));
+            }
+            lw = lw.saturating_sub(1);
+            let wline = lw * s;
             let lead = if self.text_left {
                 0
             } else {
                 region_w.saturating_sub(wline) / 2
             };
-            let y0 = top + li * 8 * s;
             let mid_x = x_start + lead + wline / 2;
+            let mut x0 = x_start + lead;
             for (k, &ci) in line.iter().enumerate() {
+                let (g, w, _) = &gs[k];
                 let dim_f = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
-                let x0 = x_start + lead + k * 6 * s;
-                let box_w = if k + 1 < line.len() { 6 * s } else { 5 * s };
+                let box_w = if k + 1 < line.len() { (w + 1) * s } else { w * s };
                 let left_side = x0 + box_w / 2 <= mid_x;
                 let raw = if left_side { mags_l[ci] } else { mags_r[ci] };
                 let mut v = raw * dim_f;
@@ -898,12 +1083,11 @@ impl Renderer {
                     v = 1.0;
                 }
                 let marker = 64 + (v * 15.0 + 0.5) as u8;
-                let glyph = Self::block_glyph(text[ci].to_ascii_uppercase());
                 let xfrac = (ci as f64 + 0.5) / m as f64;
                 let esc = self.letter_color(xfrac, v);
-                boxes.push((x0, y0, box_w));
+                boxes.push((x0, y0, box_w, lh));
                 let mut changed = false;
-                for gr in 0..7 {
+                for gr in 0..lh {
                     for pr in 0..s {
                         let y = y0 + gr * s + pr;
                         if y >= rows {
@@ -914,7 +1098,7 @@ impl Renderer {
                             if x >= x_end {
                                 break;
                             }
-                            let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
+                            let on = Self::glyph_on(g, px / s, gr, lh);
                             let want = if on { marker } else { 0 };
                             if self.prev[y * cols + x] != want {
                                 changed = true;
@@ -923,9 +1107,10 @@ impl Renderer {
                     }
                 }
                 if !changed {
+                    x0 += box_w;
                     continue;
                 }
-                for gr in 0..7 {
+                for gr in 0..lh {
                     for pr in 0..s {
                         let y = y0 + gr * s + pr;
                         if y >= rows {
@@ -938,7 +1123,7 @@ impl Renderer {
                             if x >= x_end {
                                 break;
                             }
-                            let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
+                            let on = Self::glyph_on(g, px / s, gr, lh);
                             let want = if on { marker } else { 0 };
                             let idx = y * cols + x;
                             self.prev[idx] = want;
@@ -950,13 +1135,15 @@ impl Renderer {
                         }
                     }
                 }
+                x0 += box_w;
             }
+            y0 += (lh + 1) * s;
         }
         for y in 0..rows {
             for x in x_start..x_end {
                 let mut in_box = false;
-                for &(x0, y0, w) in boxes.iter() {
-                    if y >= y0 && y < y0 + 7 * s && x >= x0 && x < x0 + w {
+                for &(x0, y0, w, h) in boxes.iter() {
+                    if y >= y0 && y < y0 + h * s && x >= x0 && x < x0 + w {
                         in_box = true;
                         break;
                     }
@@ -1561,6 +1748,54 @@ mod tests {
         let mut out = Vec::new();
         r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn cjk_metrics_and_accent_fold() {
+        assert_eq!(Renderer::glyph_wh('A'), (5, 7));
+        assert_eq!(Renderer::glyph_wh(' '), (5, 7));
+        assert_eq!(Renderer::glyph_wh('é'), (5, 7));
+        assert_eq!(Renderer::glyph_wh('中'), (16, 16));
+        assert_eq!(Renderer::glyph_wh('あ'), (16, 16));
+        assert_eq!(Renderer::glyph_wh('Ä'), (5, 7));
+        assert_eq!(Renderer::glyph_wh('\u{10FFFF}'), (5, 7));
+    }
+
+    #[test]
+    fn accent_folds_to_base_bitmap() {
+        let (g1, _, _) = Renderer::resolve_glyph('é');
+        let (g2, _, _) = Renderer::resolve_glyph('E');
+        match (g1, g2) {
+            (BigGlyph::Block(a), BigGlyph::Block(b)) => assert_eq!(a, b),
+            _ => panic!("accents must fold to block base"),
+        }
+    }
+
+    #[test]
+    fn mixed_line_picks_tall_scale() {
+        let text: Vec<char> = "A中".chars().collect();
+        let (s, lines) = Renderer::layout_text(&text, 80, 24, 1, 0);
+        assert_eq!(s, 1);
+        assert_eq!(lines, vec![vec![0, 1]]);
+    }
+
+    #[test]
+    fn cjk_draws_lit_pixels() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("中文");
+        let vals = vec![1.0; 64];
+        let mut out = Vec::new();
+        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains('█'), "CJK fallback must light pixels");
+    }
+
+    #[test]
+    fn cell_width_wide_chars() {
+        assert_eq!(Renderer::cell_width('A'), 1);
+        assert_eq!(Renderer::cell_width('é'), 1);
+        assert_eq!(Renderer::cell_width('中'), 2);
+        assert_eq!(Renderer::cell_width('あ'), 2);
     }
 
         #[test]

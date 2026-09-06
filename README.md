@@ -62,6 +62,14 @@ bass at the start. `text_size` 1-5 scales the letters (`0` = auto),
 text instead, pulsing with the overall level. The left side follows
 the left channel and the right side the right channel.
 
+Beyond the built-in chunky Latin set, any Unicode script renders via
+embedded GNU Unifont bitmaps (CJK, Hangul, kana, Cyrillic, Greek,
+Arabic presentation forms, …): wide glyphs draw full-height 16px
+tall, narrow ones 8px, mixed lines use the tallest. Common accented
+Latin letters fold to their base letter (`é` → `E`) so Western text
+keeps the uniform look. Small style leans on the terminal itself, so
+it covers everything the terminal font does (CJK counts 2 cells).
+
 ```ini
 [visualizer]
 mode = text
