@@ -41,10 +41,6 @@ pub struct Config {
     pub mode: String,
     pub sptlrx_text: String,
     pub text_source: String,
-    pub ai_model: String,
-    pub speech: bool,
-    pub web: bool,
-    pub ollama_host: String,
     pub glyphs: Vec<u8>,
 }
 
@@ -69,10 +65,6 @@ impl Default for Config {
             mode: "bars".to_string(),
             sptlrx_text: "SHARKVIS".to_string(),
             text_source: "static".to_string(),
-            ai_model: "deepseek-r1:14b".to_string(),
-            speech: true,
-            web: true,
-            ollama_host: "http://localhost:11434".to_string(),
             glyphs: DEFAULT_GLYPHS.to_vec(),
         }
     }
@@ -304,24 +296,6 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                         cfg.text_source = v;
                     }
                 }
-                b"ai_model" => {
-                    let v = String::from_utf8_lossy(&val).into_owned();
-                    if !v.trim().is_empty() {
-                        cfg.ai_model = v;
-                    }
-                }
-                b"speech" => {
-                    cfg.speech = geti(&val, 1) != 0;
-                }
-                b"web" => {
-                    cfg.web = geti(&val, 1) != 0;
-                }
-                b"ollama_host" => {
-                    let v = String::from_utf8_lossy(&val).into_owned();
-                    if !v.trim().is_empty() {
-                        cfg.ollama_host = v;
-                    }
-                }
                 b"glyphs" => cfg.glyphs = val,
                 _ => {}
             },
@@ -371,10 +345,6 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("mode = {}\n", cfg.mode));
     out.push_str(&format!("text = {}\n", cfg.sptlrx_text));
     out.push_str(&format!("text_source = {}\n", cfg.text_source));
-    out.push_str(&format!("ai_model = {}\n", cfg.ai_model));
-    out.push_str(&format!("speech = {}\n", if cfg.speech { 1 } else { 0 }));
-    out.push_str(&format!("web = {}\n", if cfg.web { 1 } else { 0 }));
-    out.push_str(&format!("ollama_host = {}\n", cfg.ollama_host));
     out.push_str("glyphs = ");
     let _ = f.write_all(out.as_bytes());
     let _ = f.write_all(&cfg.glyphs);

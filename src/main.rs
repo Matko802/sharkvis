@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-mod assistant;
 mod audio;
 mod config;
 mod dsp;
@@ -17,17 +16,15 @@ mod settings;
 mod state;
 mod term;
 
-use crate::assistant::Assistant;
 use crate::audio::Audio;
 use crate::config::{color_to_rgb, config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
 use crate::lyrics::LyricWorker;
 use crate::mpris::{poll_track, Track};
 use crate::render::{RenderMode, Renderer};
-use crate::settings::{SettingsUi, CH_ASK, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
+use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
-    term_raw_enter, term_raw_restore, term_read_codepoint, term_winsize, KEY_BACKSPACE, KEY_CHAR,
-    KEY_ENTER, KEY_ESC,
+    term_raw_enter, term_raw_restore, term_read_codepoint, term_winsize, KEY_CHAR, KEY_ESC,
 };
 
 const VIS_EPS: f64 = 0.001;
@@ -247,10 +244,6 @@ fn apply_settings(
     }
 }
 
-fn text_window(cols: u32) -> usize {
-    ((cols as usize) / 6).max(10)
-}
-
 fn clamp_cfg(cfg: &mut Config) {
     if cfg.bar_width < 1 {
         cfg.bar_width = 1;
@@ -284,12 +277,6 @@ fn clamp_cfg(cfg: &mut Config) {
     }
     if cfg.text_source != "lyrics" {
         cfg.text_source = "static".to_string();
-    }
-    if cfg.ai_model.trim().is_empty() {
-        cfg.ai_model = "deepseek-r1:14b".to_string();
-    }
-    if cfg.ollama_host.trim().is_empty() {
-        cfg.ollama_host = "http://localhost:11434".to_string();
     }
     let clean: String = cfg.sptlrx_text.to_ascii_uppercase().chars().take(24).collect();
     if clean.trim().is_empty() {
@@ -433,10 +420,8 @@ fn main() {
     let mut force_draw = true;
     let mut chmask: u32 = 0;
     let mut lyric = LyricWorker::new();
-    let mut assist = Assistant::new();
     let mut track = Track::default();
     let mut last_track_poll = Instant::now();
-    let mut ask_buf: Option<String> = None;
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
@@ -451,39 +436,7 @@ fn main() {
         let mut cp = [0u8; 8];
         let (key, clen) = term_read_codepoint(0, &mut cp);
 
-        if ask_buf.is_some() {
-            match key {
-                KEY_ESC => {
-                    ask_buf = None;
-                    force_draw = true;
-                }
-                KEY_ENTER => {
-                    let q = ask_buf.take().unwrap_or_default();
-                    if rnd.mode == RenderMode::Text && !q.trim().is_empty() {
-                        assist.ask(&cfg.ai_model, &cfg.ollama_host, &q, cfg.web, cfg.speech);
-                        force_draw = true;
-                    }
-                }
-                KEY_BACKSPACE => {
-                    if let Some(b) = ask_buf.as_mut() {
-                        b.pop();
-                        force_draw = true;
-                    }
-                }
-                KEY_CHAR => {
-                    let chunk = std::str::from_utf8(&cp[..clen]).unwrap_or("").to_string();
-                    if let Some(b) = ask_buf.as_mut() {
-                        for c in chunk.chars() {
-                            if !c.is_control() && b.len() < 200 {
-                                b.push(c);
-                            }
-                        }
-                        force_draw = true;
-                    }
-                }
-                _ => {}
-            }
-        } else if in_settings {
+        if in_settings {
             if is_k(key, &cp[..clen], b'g') || is_k(key, &cp[..clen], b'G') || key == KEY_ESC {
                 in_settings = false;
                 {
@@ -506,9 +459,6 @@ fn main() {
                 || key == 3
             {
                 break;
-            } else if is_k(key, &cp[..clen], b'/') && rnd.mode == RenderMode::Text {
-                ask_buf = Some(String::new());
-                force_draw = true;
             } else {
                 st.key(
                     &mut cfg,
@@ -516,13 +466,6 @@ fn main() {
                     if key == KEY_CHAR { Some(&cp[..clen]) } else { None },
                     &mut chmask,
                 );
-                if (chmask & CH_ASK) != 0 {
-                    chmask &= !CH_ASK;
-                    if rnd.mode == RenderMode::Text {
-                        ask_buf = Some(String::new());
-                        force_draw = true;
-                    }
-                }
                 if (chmask & CH_EDITOR) != 0 {
                     if !config_save(&cfg, &save_path) {
                         eprintln!("sharkvis: could not save config to {}", save_path);
@@ -567,9 +510,6 @@ fn main() {
                 || key == 3
             {
                 break;
-            } else if is_k(key, &cp[..clen], b'/') && rnd.mode == RenderMode::Text {
-                ask_buf = Some(String::new());
-                force_draw = true;
             }
         }
 
@@ -692,11 +632,8 @@ fn main() {
             track = poll_track();
         }
         lyric.update(&track);
-        assist.poll();
         if rnd.mode == RenderMode::Text {
-            let s = if assist.busy() || assist.has_reply() {
-                assist.view(text_window(cols))
-            } else if cfg.text_source == "lyrics" {
+            let s = if cfg.text_source == "lyrics" {
                 lyric.display(&track, &cfg.sptlrx_text)
             } else {
                 cfg.sptlrx_text.clone()
@@ -747,12 +684,6 @@ fn main() {
                 rnd.draw_stereo(&heights[0], &heights[1], pcl, &mut out, OUT_CAP);
             } else {
                 rnd.draw(&heights[0], &mut out, OUT_CAP);
-            }
-            if let Some(buf) = ask_buf.as_ref() {
-                let line = format!("\x1b[0m\x1b[{};1HASK: {}_", rows, buf);
-                if out.len() + line.len() < OUT_CAP {
-                    out.extend_from_slice(line.as_bytes());
-                }
             }
             if !out.is_empty() {
                 let t_write = if g_debug { Some(Instant::now()) } else { None };
