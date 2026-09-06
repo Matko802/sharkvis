@@ -869,27 +869,33 @@ impl Renderer {
         }
         let marker = 64 + (v * 15.0 + 0.5) as u8;
         let esc = self.letter_color(0.5, v);
-        let mut paras: Vec<&[char]> = Vec::new();
+        let grey_esc = if self.color_256 {
+            b"\x1b[38;5;240m".to_vec()
+        } else {
+            b"\x1b[38;2;96;96;96m".to_vec()
+        };
+        let dim = self.text_dim.clone();
+        let mut paras: Vec<(usize, usize)> = Vec::new();
         let mut start = 0;
         for (i, c) in text.iter().enumerate() {
             if *c == '\n' {
-                paras.push(&text[start..i]);
+                paras.push((start, i));
                 start = i + 1;
             }
         }
-        paras.push(&text[start..]);
-        let mut lines: Vec<&[char]> = Vec::new();
-        for p in paras {
-            if p.is_empty() {
-                lines.push(&p[0..0]);
+        paras.push((start, text.len()));
+        let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+        for (ps, pe) in paras {
+            if ps >= pe {
+                spans.push((ps, ps, false));
                 continue;
             }
-            let mut k = 0;
-            while k < p.len() {
+            let mut k = ps;
+            while k < pe {
                 let mut cells = 0usize;
                 let mut end = k;
-                while end < p.len() {
-                    let cw = Self::cell_width(p[end]);
+                while end < pe {
+                    let cw = Self::cell_width(text[end]);
                     if end > k && cells + cw > region_w {
                         break;
                     }
@@ -899,18 +905,20 @@ impl Renderer {
                 if end == k {
                     end = k + 1;
                 }
-                lines.push(&p[k..end]);
+                let grey = (k..end).all(|i| dim.get(i).copied().unwrap_or(false));
+                spans.push((k, end, grey));
                 k = end;
             }
         }
-        if lines.len() > rows {
-            lines.truncate(rows);
+        if spans.len() > rows {
+            spans.truncate(rows);
         }
         let x_end = (x_start + region_w).min(cols);
-        let top = rows.saturating_sub(lines.len()) / 2;
+        let top = rows.saturating_sub(spans.len()) / 2;
         let mut boxes: Vec<(usize, usize, usize)> = Vec::new();
         let mut enc = [0u8; 4];
-        for (li, line) in lines.iter().enumerate() {
+        for (li, &(s, e, grey)) in spans.iter().enumerate() {
+            let line = &text[s..e];
             let y = top + li;
             if y >= rows {
                 break;
@@ -943,7 +951,11 @@ impl Renderer {
                 continue;
             }
             seek_cell(y as u32, x0 as u32, out);
-            out.s(&esc);
+            if grey {
+                out.s(&grey_esc);
+            } else {
+                out.s(&esc);
+            }
             let mut cx = x0;
             for c in line.iter() {
                 if cx >= x_end {
@@ -1722,6 +1734,26 @@ mod tests {
         assert!(text.contains("Hi there"), "plain line must be emitted, got {:?}", &text[..text.len().min(120)]);
         assert!(!text.contains('█'), "small mode must not use block glyphs");
         assert!(text.contains("\x1b[12;37H"), "8-char line centers at col 37 row 12, got {:?}", &text[..text.len().min(120)]);
+    }
+
+    #[test]
+    fn small_text_greys_context_lines() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        r.set_rich(&[
+            ("yesterday".to_string(), false),
+            ("here".to_string(), true),
+            ("tomorrow".to_string(), false),
+        ]);
+        r.text_small = true;
+        let vals = vec![1.0; 16];
+        let mut out = Vec::new();
+        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("yesterday") && text.contains("here") && text.contains("tomorrow"), "all three lines must show, got {:?}", &text[..text.len().min(160)]);
+        assert!(text.contains("\x1b[38;2;96;96;96m"), "context lines must be forced grey");
+        assert!(text.contains("\x1b[38;2;128;128;128m"), "current line stays reactive");
     }
 
     #[test]

@@ -1181,12 +1181,7 @@ impl LyricWorker {
         if self.lines.is_empty() {
             return vec![(Self::fallback_title(track, static_text), true)];
         }
-        let mut pos = if !self.follow {
-            self.frozen.unwrap_or(self.last_pos)
-        } else {
-            self.live_pos(track)
-        };
-        pos += self.offset_ms as f64 / 1000.0;
+        let pos = self.cur_pos(track);
         let mut current: Option<String> = None;
         for line in &self.lines {
             if line.t <= pos && !line.text.trim().is_empty() {
@@ -1197,6 +1192,59 @@ impl LyricWorker {
             Some(w) => vec![(w, true)],
             None => vec![(String::new(), true)],
         }
+    }
+
+    pub fn display_context(&self, track: &Track, static_text: &str) -> Vec<(String, bool)> {
+        if self.lines.is_empty() {
+            return vec![(Self::fallback_title(track, static_text), true)];
+        }
+        let pos = self.cur_pos(track);
+        let mut idx: Option<usize> = None;
+        for (i, line) in self.lines.iter().enumerate() {
+            if line.t <= pos && !line.text.trim().is_empty() {
+                idx = Some(i);
+            }
+        }
+        let mut out = Vec::new();
+        match idx {
+            Some(c) => {
+                let mut p = c;
+                while p > 0 {
+                    p -= 1;
+                    if !self.lines[p].text.trim().is_empty() {
+                        out.push((self.lines[p].text.clone(), false));
+                        break;
+                    }
+                }
+                out.push((self.lines[c].text.clone(), true));
+                for line in self.lines.iter().skip(c + 1) {
+                    if !line.text.trim().is_empty() {
+                        out.push((line.text.clone(), false));
+                        break;
+                    }
+                }
+            }
+            None => {
+                out.push((String::new(), true));
+                for line in &self.lines {
+                    if !line.text.trim().is_empty() {
+                        out.push((line.text.clone(), false));
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn cur_pos(&self, track: &Track) -> f64 {
+        let mut pos = if !self.follow {
+            self.frozen.unwrap_or(self.last_pos)
+        } else {
+            self.live_pos(track)
+        };
+        pos += self.offset_ms as f64 / 1000.0;
+        pos
     }
 }
 
@@ -1336,6 +1384,35 @@ mod worker_tests {
         let mut no_track = track_at(0.0);
         no_track.present = false;
         assert_eq!(w.display_lines(&no_track, "STATIC"), vec![("STATIC".to_string(), true)]);
+    }
+
+    #[test]
+    fn context_shows_prev_current_next() {
+        let mut w = worker_with(vec![
+            LyricLine { t: 10.0, text: "first".to_string(), words: Vec::new() },
+            LyricLine { t: 20.0, text: String::new(), words: Vec::new() },
+            LyricLine { t: 30.0, text: "second".to_string(), words: Vec::new() },
+            LyricLine { t: 40.0, text: "third".to_string(), words: Vec::new() },
+        ]);
+        w.update_pos(35.0);
+        assert_eq!(
+            w.display_context(&track_at(35.0), "STATIC"),
+            vec![
+                ("first".to_string(), false),
+                ("second".to_string(), true),
+                ("third".to_string(), false),
+            ]
+        );
+        w.update_pos(5.0);
+        assert_eq!(
+            w.display_context(&track_at(5.0), "STATIC"),
+            vec![(String::new(), true), ("first".to_string(), false)]
+        );
+        w.update_pos(45.0);
+        assert_eq!(
+            w.display_context(&track_at(45.0), "STATIC"),
+            vec![("second".to_string(), false), ("third".to_string(), true)]
+        );
     }
 }
 

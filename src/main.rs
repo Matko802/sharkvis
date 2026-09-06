@@ -773,7 +773,11 @@ fn main() {
         }
         if rnd.mode == RenderMode::Text {
             if cfg.text_source == "lyrics" {
-                let rows = lyric.display_lines(&track, &cfg.sptlrx_text);
+                let rows = if cfg.text_style == "small" {
+                    lyric.display_context(&track, &cfg.sptlrx_text)
+                } else {
+                    lyric.display_lines(&track, &cfg.sptlrx_text)
+                };
                 let shown: String =
                     rows.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
                 if shown != last_lyric_shown {
