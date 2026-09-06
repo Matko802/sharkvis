@@ -736,10 +736,17 @@ fn quality_bonus(lines: &[LyricLine], duration: f64) -> i64 {
 }
 
 fn fetch_auto(artist: &str, title: &str, duration: f64) -> Vec<LyricLine> {
-    let mut best: Vec<LyricLine> = Vec::new();
-    let mut best_score = -10000i64;
+    let exact = fetch_synced(artist, title).unwrap_or_default();
+    if !exact.is_empty() && 100 + quality_bonus(&exact, duration) >= 160 {
+        return exact;
+    }
+    let mut best_score = if exact.is_empty() {
+        -10000i64
+    } else {
+        100 + quality_bonus(&exact, duration)
+    };
+    let mut best = exact;
     let cands: Vec<(i64, Option<Vec<LyricLine>>)> = vec![
-        (100, fetch_synced(artist, title)),
         (90, crate::musixmatch::fetch_musixmatch(artist, title, duration)),
         (60, fetch_search_synced(artist, title, duration)),
         (30, fetch_genius(artist, title, duration)),
@@ -1327,6 +1334,11 @@ mod tests {
         let many: Vec<LyricLine> = (0..100).map(|i| plain(i as f64 * 1.7)).collect();
         let sixty: Vec<LyricLine> = (0..60).map(|i| plain(i as f64 * 1.7)).collect();
         assert_eq!(quality_bonus(&many, 0.0), quality_bonus(&sixty, 0.0));
+        let full_song: Vec<LyricLine> =
+            (0..40).map(|i| plain(i as f64 * 5.0 + (i % 3) as f64)).collect();
+        assert!(quality_bonus(&full_song, 240.0) >= 60, "great exact hits must clear the auto fast path");
+        let thin: Vec<LyricLine> = (0..10).map(|i| plain(i as f64 * 10.0)).collect();
+        assert!(quality_bonus(&thin, 240.0) < 60, "weak hits must fall through to full gather");
     }
 }
 
