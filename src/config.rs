@@ -41,6 +41,9 @@ pub struct Config {
     pub mode: String,
     pub sptlrx_text: String,
     pub text_source: String,
+    pub text_align: String,
+    pub provider: String,
+    pub lyric_offset_ms: i64,
     pub lyrics_folder: String,
     pub mpris_players: String,
     pub glyphs: Vec<u8>,
@@ -67,6 +70,9 @@ impl Default for Config {
             mode: "bars".to_string(),
             sptlrx_text: "SHARKVIS".to_string(),
             text_source: "static".to_string(),
+            text_align: "center".to_string(),
+            provider: "lrclib".to_string(),
+            lyric_offset_ms: 0,
             lyrics_folder: String::new(),
             mpris_players: String::new(),
             glyphs: DEFAULT_GLYPHS.to_vec(),
@@ -311,6 +317,23 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                         cfg.text_source = v;
                     }
                 }
+                b"text_align" => {
+                    let v = String::from_utf8_lossy(&val).into_owned();
+                    if v == "left" || v == "center" {
+                        cfg.text_align = v;
+                    }
+                }
+                b"provider" => {
+                    let v = String::from_utf8_lossy(&val).into_owned();
+                    if v == "genius" {
+                        cfg.provider = v;
+                    }
+                }
+                b"offset_ms" => {
+                    if let Ok(n) = String::from_utf8_lossy(&val).trim().parse::<i64>() {
+                        cfg.lyric_offset_ms = n.clamp(-10000, 10000);
+                    }
+                }
                 b"glyphs" => cfg.glyphs = val,
                 _ => {}
             },
@@ -360,6 +383,9 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("mode = {}\n", cfg.mode));
     out.push_str(&format!("text = {}\n", cfg.sptlrx_text));
     out.push_str(&format!("text_source = {}\n", cfg.text_source));
+    out.push_str(&format!("text_align = {}\n", cfg.text_align));
+    out.push_str(&format!("provider = {}\n", cfg.provider));
+    out.push_str(&format!("offset_ms = {}\n", cfg.lyric_offset_ms));
     out.push_str("glyphs = ");
     let _ = f.write_all(out.as_bytes());
     let _ = f.write_all(&cfg.glyphs);

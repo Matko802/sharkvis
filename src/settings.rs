@@ -27,7 +27,9 @@ const S_CH: usize = 14;
 const S_CHARSET: usize = 15;
 const S_TEXT: usize = 16;
 const S_TEXTSRC: usize = 17;
-const S_COUNT: usize = 18;
+const S_PROVIDER: usize = 18;
+const S_OFFSET: usize = 19;
+const S_COUNT: usize = 20;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -50,6 +52,8 @@ const LABELS: [&str; S_COUNT] = [
     "charset",
     "text",
     "text source",
+    "provider",
+    "offset ms",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -226,6 +230,24 @@ impl SettingsUi {
                     *changed |= CH_LAYOUT;
                 }
             }
+            S_PROVIDER => {
+                let v = if cfg.provider == "genius" {
+                    "lrclib".to_string()
+                } else {
+                    "genius".to_string()
+                };
+                if v != cfg.provider {
+                    cfg.provider = v;
+                    *changed |= CH_LAYOUT;
+                }
+            }
+            S_OFFSET => {
+                let v = (cfg.lyric_offset_ms + dir * 500).clamp(-10000, 10000);
+                if v != cfg.lyric_offset_ms {
+                    cfg.lyric_offset_ms = v;
+                    *changed |= CH_LAYOUT;
+                }
+            }
             _ => {}
         }
     }
@@ -247,7 +269,9 @@ impl SettingsUi {
             "bars" => rows.extend_from_slice(&[
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
-            "text" => rows.extend_from_slice(&[S_TEXT, S_TEXTSRC, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH]),
+            "text" => rows.extend_from_slice(&[
+                S_TEXT, S_TEXTSRC, S_PROVIDER, S_OFFSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
+            ]),
             _ => {}
         }
         rows.sort_unstable();
@@ -409,6 +433,8 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_CHARSET => String::from_utf8_lossy(&cfg.glyphs).into_owned(),
         S_TEXT => cfg.sptlrx_text.clone(),
         S_TEXTSRC => cfg.text_source.clone(),
+        S_PROVIDER => cfg.provider.clone(),
+        S_OFFSET => format!("{:+}ms", cfg.lyric_offset_ms),
         _ => String::new(),
     }
 }

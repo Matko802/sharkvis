@@ -73,10 +73,17 @@ players = firefox,spotify
 ```
 
 Lyrics sources, in order: local `.lrc` files under `folder` (fuzzy
-matched on artist + title), [lrclib.net](https://lrclib.net), then YouTube
-auto-captions via `yt-dlp` when the player exposes the video URL.
+matched on artist + title), [lrclib.net](https://lrclib.net) (exact, then
+scored search), [Genius](https://genius.com) (no token needed, plain
+lyrics spread over the track), then YouTube auto-captions via `yt-dlp`
+(from the player URL, else a duration-guarded search).
 Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
 whitelists MPRIS players (first playing match wins); empty means any.
+
+Text-mode keys (lyrics showing): `s` manual search (`Artist - Title`),
+`l` cycle media player, `r` force lyric reload, `c` left/center align,
+`a` follow on/off, `p` switch provider (lrclib/genius), `+`/`-` nudge
+sync ±500ms, `0` reset sync.
 
 ## Update
 

@@ -63,6 +63,19 @@ pub(crate) fn cmd_out(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<Strin
     String::from_utf8(out).ok().map(|s| s.trim().to_string())
 }
 
+pub fn player_list() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(list) = cmd_out("playerctl", &["-l"], 500) {
+        for line in list.lines() {
+            let p = line.trim();
+            if !p.is_empty() {
+                out.push(p.to_string());
+            }
+        }
+    }
+    out
+}
+
 fn playing_player(allow: &[String]) -> Option<String> {
     let list = cmd_out("playerctl", &["-l"], 500)?;
     for line in list.lines() {
@@ -82,15 +95,11 @@ fn playing_player(allow: &[String]) -> Option<String> {
     None
 }
 
-pub fn poll_track(allow: &[String]) -> Track {
-    let mut t = Track::default();
-    let Some(player) = playing_player(allow) else {
-        return t;
-    };
-    t.player = player.clone();
+fn fill_meta(t: &mut Track, player: &str) {
+    t.player = player.to_string();
     let meta = cmd_out(
         "playerctl",
-        &["-p", &player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}"],
+        &["-p", player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}"],
         500,
     )
     .unwrap_or_default();
@@ -106,10 +115,27 @@ pub fn poll_track(allow: &[String]) -> Track {
         .unwrap_or(0.0);
     t.url = parts.next().unwrap_or("").trim().to_string();
     if t.title.is_empty() && t.url.is_empty() {
-        return t;
+        return;
     }
     t.position = poll_position(&t.player).unwrap_or(0.0);
     t.present = true;
+}
+
+pub fn poll_track(allow: &[String]) -> Track {
+    let mut t = Track::default();
+    let Some(player) = playing_player(allow) else {
+        return t;
+    };
+    fill_meta(&mut t, &player);
+    t
+}
+
+pub fn poll_named(player: &str) -> Track {
+    let mut t = Track::default();
+    if player.trim().is_empty() {
+        return t;
+    }
+    fill_meta(&mut t, player);
     t
 }
 

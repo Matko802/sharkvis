@@ -22,6 +22,147 @@ pub(crate) fn url_encode(s: &str) -> String {
     o
 }
 
+pub(crate) fn sanitize_query(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut skip_bracket = 0u32;
+    let mut skip_paren = 0u32;
+    for c in s.chars() {
+        match c {
+            '[' => skip_bracket += 1,
+            ']' => skip_bracket = skip_bracket.saturating_sub(1),
+            '(' => skip_paren += 1,
+            ')' => skip_paren = skip_paren.saturating_sub(1),
+            _ if skip_bracket == 0 && skip_paren == 0 => o.push(c),
+            _ => {}
+        }
+    }
+    o.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.to_ascii_lowercase().chars().collect();
+    let b: Vec<char> = b.to_ascii_lowercase().chars().collect();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+struct SearchHit {
+    artist: String,
+    title: String,
+    duration: f64,
+    synced: Option<String>,
+    plain: Option<String>,
+}
+
+fn parse_search_hits(body: &str) -> Vec<SearchHit> {
+    let mut out = Vec::new();
+    for chunk in body.split("{\"id\":").skip(1) {
+        if chunk.contains("\"instrumental\":true") {
+            continue;
+        }
+        let artist = json_string(chunk, "artistName").unwrap_or_default();
+        let title = json_string(chunk, "trackName").unwrap_or_default();
+        if artist.is_empty() && title.is_empty() {
+            continue;
+        }
+        let duration = chunk
+            .split("\"duration\":")
+            .nth(1)
+            .and_then(|s| s.split([',', '}']).next())
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let synced = json_string(chunk, "syncedLyrics").filter(|s| !s.trim().is_empty());
+        let plain = json_string(chunk, "plainLyrics").filter(|s| !s.trim().is_empty());
+        out.push(SearchHit { artist, title, duration, synced, plain });
+    }
+    out
+}
+
+fn score_hit(q_artist: &str, q_title: &str, q_dur: f64, hit: &SearchHit) -> (usize, u64, usize) {
+    let q = normalize_name(&format!("{} {}", q_artist, q_title));
+    let h = normalize_name(&format!("{} {}", hit.artist, hit.title));
+    let text = levenshtein(&q, &h);
+    let dur = if q_dur > 0.0 && hit.duration > 0.0 {
+        (q_dur - hit.duration).abs() as u64
+    } else {
+        0
+    };
+    (text / 3, dur, text)
+}
+
+fn lrclib_search_hits(artist: &str, title: &str) -> Vec<SearchHit> {
+    let artist = sanitize_query(artist);
+    let title = sanitize_query(title);
+    if artist.is_empty() && title.is_empty() {
+        return Vec::new();
+    }
+    let url = format!(
+        "https://lrclib.net/api/search?q={}%20{}",
+        url_encode(&artist),
+        url_encode(&title)
+    );
+    let body = match cmd_out("curl", &["-fsSL", "-m", "15", &url], 20000) {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+    parse_search_hits(&body)
+}
+
+fn best_synced(hits: &[SearchHit], q_artist: &str, q_title: &str, q_dur: f64) -> Option<Vec<LyricLine>> {
+    let mut best: Option<((usize, u64, usize), &SearchHit)> = None;
+    for hit in hits {
+        if hit.synced.is_none() {
+            continue;
+        }
+        let score = score_hit(q_artist, q_title, q_dur, hit);
+        if best.as_ref().is_none_or(|(s, _)| score < *s) {
+            best = Some((score, hit));
+        }
+    }
+    let (_, hit) = best?;
+    let lines = parse_lrc(hit.synced.as_ref()?);
+    if lines.is_empty() {
+        return None;
+    }
+    Some(lines)
+}
+
+fn best_plain(hits: &[SearchHit], q_artist: &str, q_title: &str, q_dur: f64) -> Option<Vec<LyricLine>> {
+    let mut best: Option<((usize, u64, usize), &SearchHit)> = None;
+    for hit in hits {
+        if hit.plain.is_none() {
+            continue;
+        }
+        let score = score_hit(q_artist, q_title, q_dur, hit);
+        if best.as_ref().is_none_or(|(s, _)| score < *s) {
+            best = Some((score, hit));
+        }
+    }
+    let (_, hit) = best?;
+    let texts: Vec<String> = hit
+        .plain
+        .as_ref()?
+        .lines()
+        .map(|l| l.trim().to_string())
+        .collect();
+    distribute_plain(texts, q_dur)
+}
+
 pub(crate) fn json_string(src: &str, key: &str) -> Option<String> {
     let pat = format!("\"{}\":", key);
     let mut rest = src.split(&pat).nth(1)?.trim_start();
@@ -418,6 +559,7 @@ fn fetch_lyrics(
     duration: f64,
     cache_path: &str,
     local_folder: &str,
+    prefer_genius: bool,
 ) -> Vec<LyricLine> {
     if !local_folder.trim().is_empty() {
         if let Some(lines) = scan_local_lrc(local_folder, artist, title) {
@@ -426,13 +568,29 @@ fn fetch_lyrics(
             }
         }
     }
+    let mut genius_done = false;
+    if prefer_genius {
+        if let Some(lines) = fetch_genius(artist, title, duration) {
+            if !lines.is_empty() {
+                return lines;
+            }
+        }
+        genius_done = true;
+    }
     let synced = fetch_synced(artist, title).unwrap_or_default();
     if !synced.is_empty() {
         return synced;
     }
-    if let Some(lines) = fetch_search_synced(artist, title) {
+    if let Some(lines) = fetch_search_synced(artist, title, duration) {
         if !lines.is_empty() {
             return lines;
+        }
+    }
+    if !genius_done {
+        if let Some(lines) = fetch_genius(artist, title, duration) {
+            if !lines.is_empty() {
+                return lines;
+            }
         }
     }
     if !url.is_empty() {
@@ -455,28 +613,111 @@ fn fetch_lyrics(
     Vec::new()
 }
 
-fn fetch_search_synced(artist: &str, title: &str) -> Option<Vec<LyricLine>> {
-    let url = format!(
-        "https://lrclib.net/api/search?q={}%20{}",
-        url_encode(artist),
-        url_encode(title)
-    );
-    let body = cmd_out("curl", &["-fsSL", "-m", "15", &url], 20000)?;
-    for chunk in body.split("{\"id\":").skip(1) {
-        if chunk.contains("\"instrumental\":true") {
-            continue;
-        }
-        if let Some(synced) = json_string(chunk, "syncedLyrics") {
-            if synced.trim().is_empty() {
-                continue;
+const BROWSER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+
+fn html_entity(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+}
+
+fn extract_lyrics_div(html: &str) -> Option<String> {
+    let key = "data-lyrics-container=\"true\"";
+    let start = html.find(key)?;
+    let mut tag_end = html[start..].find('>')?;
+    tag_end += start;
+    let mut depth = 1usize;
+    let mut o = String::new();
+    let bytes = html.as_bytes();
+    let mut i = tag_end + 1;
+    while i < bytes.len() && depth > 0 {
+        if html[i..].starts_with("</div") {
+            depth -= 1;
+            if let Some(end) = html[i..].find('>') {
+                i += end + 1;
+            } else {
+                break;
             }
-            let lines = parse_lrc(&synced);
-            if !lines.is_empty() {
-                return Some(lines);
+        } else if html[i..].starts_with("<div") {
+            depth += 1;
+            if let Some(end) = html[i..].find('>') {
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else if html[i..].starts_with("<br") {
+            o.push('\n');
+            if let Some(end) = html[i..].find('>') {
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else if bytes[i] == b'<' {
+            if let Some(end) = html[i..].find('>') {
+                i += end + 1;
+            } else {
+                break;
+            }
+        } else {
+            o.push(html[i..].chars().next()?);
+            i += html[i..].chars().next()?.len_utf8();
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    Some(o)
+}
+
+fn fetch_genius(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
+    if duration < 30.0 {
+        return None;
+    }
+    let artist = sanitize_query(artist);
+    let title = sanitize_query(title);
+    if artist.is_empty() && title.is_empty() {
+        return None;
+    }
+    let url = format!(
+        "https://genius.com/api/search/multi?q={}%20{}",
+        url_encode(&artist),
+        url_encode(&title)
+    );
+    let body = cmd_out("curl", &["-fsSL", "-m", "15", "-A", BROWSER_UA, &url], 20000)?;
+    if body.trim_start().starts_with('<') {
+        return None;
+    }
+    let mut page_url = None;
+    for chunk in body.split("\"type\":\"song\"").skip(1) {
+        if let Some(u) = json_string(chunk, "url") {
+            if u.contains("genius.com/") && u.len() < 300 {
+                page_url = Some(u);
+                break;
             }
         }
     }
-    None
+    let page_url = page_url?;
+    let html = cmd_out("curl", &["-fsSL", "-m", "20", "-A", BROWSER_UA, &page_url], 25000)?;
+    let raw = extract_lyrics_div(&html)?;
+    let texts: Vec<String> = html_entity(&raw)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let lines = distribute_plain(texts, duration)?;
+    if lines.is_empty() {
+        return None;
+    }
+    Some(lines)
+}
+
+fn fetch_search_synced(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
+    let hits = lrclib_search_hits(artist, title);
+    best_synced(&hits, artist, title, duration)
 }
 
 fn distribute_plain(texts: Vec<String>, duration: f64) -> Option<Vec<LyricLine>> {
@@ -498,27 +739,8 @@ fn fetch_search_plain(artist: &str, title: &str, duration: f64) -> Option<Vec<Ly
     if duration < 30.0 {
         return None;
     }
-    let url = format!(
-        "https://lrclib.net/api/search?q={}%20{}",
-        url_encode(artist),
-        url_encode(title)
-    );
-    let body = cmd_out("curl", &["-fsSL", "-m", "15", &url], 20000)?;
-    for chunk in body.split("{\"id\":").skip(1) {
-        if chunk.contains("\"instrumental\":true") {
-            continue;
-        }
-        if let Some(plain) = json_string(chunk, "plainLyrics") {
-            let texts: Vec<String> = plain
-                .lines()
-                .map(|l| l.trim().to_string())
-                .collect();
-            if let Some(lines) = distribute_plain(texts, duration) {
-                return Some(lines);
-            }
-        }
-    }
-    None
+    let hits = lrclib_search_hits(artist, title);
+    best_plain(&hits, artist, title, duration)
 }
 
 fn fetch_synced(artist: &str, title: &str) -> Option<Vec<LyricLine>> {
@@ -546,6 +768,11 @@ pub struct LyricWorker {
     last_pos: f64,
     pos_prev: (f64, Instant),
     pos_cur: (f64, Instant),
+    last_track: String,
+    manual: Option<(String, String)>,
+    offset_ms: i64,
+    follow: bool,
+    frozen: Option<f64>,
 }
 
 impl LyricWorker {
@@ -559,11 +786,60 @@ impl LyricWorker {
             last_pos: 0.0,
             pos_prev: (0.0, now),
             pos_cur: (0.0, now),
+            last_track: String::new(),
+            manual: None,
+            offset_ms: 0,
+            follow: true,
+            frozen: None,
         }
     }
 
-    pub fn update(&mut self, track: &Track, local_folder: &str) {
-        self.update_meta(track, local_folder);
+    pub fn set_offset_ms(&mut self, ms: i64) {
+        self.offset_ms = ms.clamp(-10000, 10000);
+    }
+
+    pub fn set_follow(&mut self, on: bool, pos: f64) {
+        self.follow = on;
+        if on {
+            self.frozen = None;
+        } else if pos.is_finite() && pos >= 0.0 {
+            self.frozen = Some(pos);
+        }
+    }
+
+    pub fn following(&self) -> bool {
+        self.follow
+    }
+
+    pub fn search_override(&mut self, artist: String, title: String) {
+        let (a, t) = (artist.trim().to_string(), title.trim().to_string());
+        if a.is_empty() && t.is_empty() {
+            return;
+        }
+        self.manual = Some((a, t));
+        self.lines.clear();
+        self.rx = None;
+        self.last_attempt = None;
+        self.key = String::new();
+    }
+
+    pub fn force_reload(&mut self) {
+        self.lines.clear();
+        self.rx = None;
+        self.last_attempt = None;
+        if !self.key.is_empty() {
+            if let Some(p) = cache_path(&self.key) {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+
+    pub fn poke(&mut self) {
+        self.last_attempt = None;
+    }
+
+    pub fn update(&mut self, track: &Track, local_folder: &str, prefer_genius: bool) {
+        self.update_meta(track, local_folder, prefer_genius);
         if track.present {
             self.last_pos = track.position;
             if self.pos_cur.0 == 0.0 && track.position > 0.0 {
@@ -600,17 +876,29 @@ impl LyricWorker {
         Self::extrapolate(p0, t0, p1, t1, Instant::now())
     }
 
-    fn update_meta(&mut self, track: &Track, local_folder: &str) {
+    fn update_meta(&mut self, track: &Track, local_folder: &str, prefer_genius: bool) {
         if let Some((k, lines)) = self.rx.as_ref().and_then(|r| r.try_recv().ok()) {
             self.rx = None;
             if k == self.key {
                 self.lines = lines;
             }
         }
-        let key = track.key();
-        if key.is_empty() {
-            return;
+        let tkey = track.key();
+        if !tkey.is_empty() && !self.last_track.is_empty() && tkey != self.last_track {
+            self.last_track = tkey.clone();
+            self.manual = None;
+        } else if !tkey.is_empty() {
+            self.last_track = tkey.clone();
         }
+        let (key, artist, title) = match &self.manual {
+            Some((a, t)) => (format!("manual|{}|{}", a, t), a.clone(), t.clone()),
+            None => {
+                if tkey.is_empty() {
+                    return;
+                }
+                (tkey, track.artist.clone(), track.title.clone())
+            }
+        };
         if key != self.key {
             self.key = key.clone();
             self.lines.clear();
@@ -640,15 +928,13 @@ impl LyricWorker {
             }
         }
         self.last_attempt = Some(Instant::now());
-        let artist = track.artist.clone();
-        let title = track.title.clone();
         let url = track.url.clone();
         let duration = track.duration;
         let folder = local_folder.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let lines = fetch_lyrics(&artist, &title, &url, duration, &path, &folder);
+            let lines = fetch_lyrics(&artist, &title, &url, duration, &path, &folder, prefer_genius);
             if !lines.is_empty() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -721,7 +1007,12 @@ impl LyricWorker {
         if self.lines.is_empty() {
             return vec![(Self::fallback_title(track, static_text), true)];
         }
-        let pos = self.live_pos(track);
+        let mut pos = if !self.follow {
+            self.frozen.unwrap_or(self.last_pos)
+        } else {
+            self.live_pos(track)
+        };
+        pos += self.offset_ms as f64 / 1000.0;
         let Some(i) = self.current_idx(pos) else {
             return vec![(String::new(), true)];
         };
@@ -775,6 +1066,11 @@ mod worker_tests {
             last_pos: 0.0,
             pos_prev: (0.0, now),
             pos_cur: (0.0, now),
+            last_track: "a|b".to_string(),
+            manual: None,
+            offset_ms: 0,
+            follow: true,
+            frozen: None,
         }
     }
 
@@ -944,5 +1240,82 @@ mod interp_tests {
         assert_eq!(LyricWorker::extrapolate(10.0, t0, 30.0, t1, now), 30.0);
         let late = t1 + Duration::from_millis(5000);
         assert_eq!(LyricWorker::extrapolate(10.0, t0, 10.2, t1, late), 10.2);
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::{
+        dedup_rolling, distribute_plain, extract_lyrics_div, fuzzy_score, html_entity,
+        levenshtein, normalize_name, sanitize_query, LyricLine,
+    };
+    use crate::mpris::Track;
+
+    fn line(t: f64, text: &str) -> LyricLine {
+        LyricLine { t, text: text.to_string() }
+    }
+
+    #[test]
+    fn sanitiser_strips_brackets() {
+        assert_eq!(sanitize_query("More & More (Sped Up) [Official Video]"), "More & More");
+        assert_eq!(sanitize_query("  Coldplay  "), "Coldplay");
+    }
+
+    #[test]
+    fn levenshtein_forgives_typos() {
+        assert_eq!(levenshtein("tyler", "tyler"), 0);
+        assert_eq!(levenshtein("tylor", "tyler"), 1);
+        assert!(levenshtein("coldplay yellow", "metallica nothing") > 10);
+    }
+
+    #[test]
+    fn genius_div_extracts_text() {
+        let html = "<html><body><div data-lyrics-container=\"true\">hello<br>world <b>bold</b></div><div>other</div></body></html>";
+        assert_eq!(extract_lyrics_div(html), Some("hello\nworld bold".to_string()));
+        assert_eq!(extract_lyrics_div("<html>nope</html>"), None);
+        assert_eq!(html_entity("a &amp; b &#x27; c &nbsp;d"), "a & b ' c  d");
+    }
+
+    #[test]
+    fn offset_shifts_words_and_follow_freezes() {
+        let mut w = super::LyricWorker::new();
+        w.lines = vec![line(10.0, "one two three four"), line(20.0, "next line")];
+        w.key = "a|b".to_string();
+        w.update_pos(15.0);
+        let track = Track {
+            present: true,
+            player: String::new(),
+            artist: "a".to_string(),
+            title: "b".to_string(),
+            position: 15.0,
+            duration: 30.0,
+            url: String::new(),
+        };
+        assert_eq!(w.display_lines(&track, "S"), vec![("two".to_string(), true)]);
+        w.offset_ms = 4000;
+        assert_eq!(w.display_lines(&track, "S"), vec![("four".to_string(), true)]);
+        w.offset_ms = 0;
+        w.set_follow(false, 15.0);
+        assert!(!w.following());
+        assert_eq!(w.display_lines(&track, "S"), vec![("two".to_string(), true)]);
+        w.set_follow(true, 15.0);
+        assert!(w.following());
+    }
+
+    #[test]
+    fn manual_search_overrides_track() {
+        let mut w = super::LyricWorker::new();
+        w.search_override("Coldplay".to_string(), "Yellow".to_string());
+        let track = Track {
+            present: true,
+            player: String::new(),
+            artist: "other".to_string(),
+            title: "song".to_string(),
+            position: 0.0,
+            duration: 0.0,
+            url: String::new(),
+        };
+        w.update_meta(&track, "", false);
+        assert!(w.key.starts_with("manual|"));
     }
 }

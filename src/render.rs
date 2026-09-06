@@ -51,6 +51,7 @@ pub struct Renderer {
     text: Vec<char>,
     text_dim: Vec<bool>,
     focus: usize,
+    pub text_left: bool,
 }
 
 #[derive(Default)]
@@ -277,6 +278,7 @@ impl Renderer {
             text: "SHARKVIS".chars().collect(),
             text_dim: Vec::new(),
             focus: 0,
+            text_left: false,
         };
         r.set_glyphs(None);
         r
@@ -705,7 +707,11 @@ impl Renderer {
                 continue;
             }
             let wline = line.len() * 6 * s - s;
-            let lead = region_w.saturating_sub(wline) / 2;
+            let lead = if self.text_left {
+                0
+            } else {
+                region_w.saturating_sub(wline) / 2
+            };
             let y0 = top + li * 8 * s;
             for (k, &ci) in line.iter().enumerate() {
                 let mut v = mags[ci] * if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
