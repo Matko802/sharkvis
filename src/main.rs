@@ -765,7 +765,7 @@ fn main() {
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;
-        rnd.text_small = cfg.text_style == "small";
+        rnd.text_small = cfg.text_style == "normal";
         if cfg.provider != last_provider {
             last_provider = cfg.provider.clone();
             lyric.poke();
@@ -773,7 +773,7 @@ fn main() {
         }
         if rnd.mode == RenderMode::Text {
             if cfg.text_source == "lyrics" {
-                let rows = if cfg.text_style == "small" {
+                let rows = if cfg.text_style == "normal" {
                     lyric.display_context(&track, &cfg.sptlrx_text)
                 } else {
                     lyric.display_lines(&track, &cfg.sptlrx_text)

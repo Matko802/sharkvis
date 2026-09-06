@@ -74,7 +74,7 @@ impl Default for Config {
             text_source: "static".to_string(),
             text_align: "center".to_string(),
             text_size: 1,
-            text_style: "big".to_string(),
+            text_style: "big ahh".to_string(),
             provider: "auto".to_string(),
             lyric_offset_ms: 0,
             lyrics_folder: String::new(),
@@ -334,8 +334,12 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                 }
                 b"text_style" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
-                    if v == "small" || v == "big" {
+                    if v == "big ahh" || v == "normal" {
                         cfg.text_style = v;
+                    } else if v == "big" {
+                        cfg.text_style = "big ahh".to_string();
+                    } else if v == "small" {
+                        cfg.text_style = "normal".to_string();
                     }
                 }
                 b"provider" => {

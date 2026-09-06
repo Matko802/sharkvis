@@ -28,9 +28,9 @@ const S_CHARSET: usize = 15;
 const S_TEXT: usize = 16;
 const S_TEXTSRC: usize = 17;
 const S_TEXTSIZE: usize = 18;
-const S_PROVIDER: usize = 19;
-const S_OFFSET: usize = 20;
-const S_STYLE: usize = 21;
+const S_STYLE: usize = 19;
+const S_PROVIDER: usize = 20;
+const S_OFFSET: usize = 21;
 const S_COUNT: usize = 22;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
@@ -55,9 +55,9 @@ const LABELS: [&str; S_COUNT] = [
     "text",
     "text source",
     "text size",
+    "text style",
     "provider",
     "offset ms",
-    "text style",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -261,7 +261,7 @@ impl SettingsUi {
                 }
             }
             S_STYLE => {
-                cfg.text_style = if cfg.text_style == "small" { "big".to_string() } else { "small".to_string() };
+                cfg.text_style = if cfg.text_style == "normal" { "big ahh".to_string() } else { "normal".to_string() };
                 *changed |= CH_LAYOUT;
             }
             _ => {}

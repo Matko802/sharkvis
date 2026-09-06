@@ -58,8 +58,8 @@ are saved automatically when you close the panel or quit.
 block letters, each letter lit by its own frequency bin exactly like
 the bars: bin value drives letter brightness the way it drives bar
 height, no auto-gain. `text_size` 1-5 scales the letters (`0` = auto),
-`text_style = small` renders the same line as plain small terminal
-text instead, pulsing with the overall level, with the previous and
+`text_style = normal` renders the same line as plain small terminal
+text instead (`big ahh` is the default block letters), pulsing with the overall level, with the previous and
 next lines above and below forced grey while the current line stays
 audio-reactive. The left side follows
 the left channel and the right side the right channel.
@@ -78,7 +78,7 @@ mode = text
 text = SHARKVIS
 text_source = lyrics
 text_size = 1
-text_style = big
+text_style = big ahh
 
 [lyrics]
 folder = ~/Music
