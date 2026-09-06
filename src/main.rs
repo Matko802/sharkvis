@@ -825,7 +825,7 @@ fn main() {
                 st.draw(&cfg, &mut out, OUT_CAP, rows, panel_width_for(cols));
             }
             if cfg.channels > 1 {
-                rnd.draw_stereo(&heights[0], &heights[1], pcl, &mut out, OUT_CAP);
+                rnd.draw_stereo(&heights[0], &heights[1], pcl, pcr, &mut out, OUT_CAP);
             } else {
                 rnd.draw(&heights[0], &mut out, OUT_CAP);
             }

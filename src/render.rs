@@ -1592,6 +1592,7 @@ impl Renderer {
         left: &[f64],
         right: &[f64],
         per_ch_l: usize,
+        per_ch_r: usize,
         out: &mut Vec<u8>,
         cap: usize,
     ) {
@@ -1604,7 +1605,11 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Text => self.draw_text_mode(left, Some(right), self.x_off, region, &mut o),
+            RenderMode::Text => {
+                let nl = per_ch_l.min(left.len());
+                let nr = per_ch_r.min(right.len());
+                self.draw_text_mode(&left[..nl], Some(&right[..nr]), self.x_off, region, &mut o)
+            }
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),
@@ -1680,6 +1685,29 @@ mod tests {
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("\x1b[38;2;64;64;64m"), "loud bins must be bright, got {:?}", &text[..text.len().min(200)]);
         assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet bins must stay dim like bars");
+    }
+
+    #[test]
+    fn text_stereo_ignores_stale_tail() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.mode = RenderMode::Text;
+        r.set_text("AB");
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        let mut left = vec![0.001; 64];
+        let mut right = vec![0.001; 64];
+        for v in left.iter_mut().take(4) {
+            *v = 1.0;
+        }
+        for v in right.iter_mut().take(4) {
+            *v = 1.0;
+        }
+        let mut out = Vec::new();
+        r.draw_stereo(&left, &right, 4, 4, &mut out, 1 << 20);
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "left letter must be bright, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;191;191;191m"), "right letter must use fresh bins, got {:?}", &text[..text.len().min(200)]);
+        assert!(!text.contains("19;19;19"), "no letter may fall into the stale tail");
     }
 
     #[test]
