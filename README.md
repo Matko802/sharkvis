@@ -93,19 +93,18 @@ Lyrics sources, in order: local `.lrc` files under `folder` (fuzzy
 matched on artist + title), [lrclib.net](https://lrclib.net) (exact, then
 duration-scored search), [Musixmatch](https://www.musixmatch.com) (anonymous
 token, no account needed — true word-level Richsync timing when
-available), [Genius](https://genius.com) (no token needed, plain
-lyrics spread over the track), then YouTube auto-captions via `yt-dlp`
+available), then YouTube auto-captions via `yt-dlp`
 (from the player URL, else a duration-guarded search).
 Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
 whitelists MPRIS players (first playing match wins, `playerctld`
 preferred); empty means any. `provider` defaults to `auto`, which
-queries lrclib exact, Musixmatch, lrclib search and Genius, then
+queries lrclib exact, Musixmatch and lrclib search, then
 picks the best per track: word-level timing and full-track synced
 coverage win, generated even spreads and stub fragments lose. A
 strong lrclib exact hit returns immediately without waiting on the
 slower sources. Set an
 explicit provider to pin first-hit-wins order instead. `p` cycles
-the provider (auto/lrclib/musixmatch/genius).
+the provider (auto/lrclib/musixmatch).
 
 Text-mode keys (lyrics showing): `s` manual search (`Artist - Title`),
 `l` cycle media player, `r` force lyric reload, `c` left/center align,

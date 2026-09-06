@@ -585,7 +585,6 @@ fn main() {
                     cfg.provider = match cfg.provider.as_str() {
                         "auto" => "lrclib".to_string(),
                         "lrclib" => "musixmatch".to_string(),
-                        "musixmatch" => "genius".to_string(),
                         _ => "auto".to_string(),
                     };
                     lyric.poke();

@@ -689,11 +689,10 @@ pub struct FetchOpts {
     pub provider: String,
 }
 
-fn provider_order(pref: &str) -> [&str; 3] {
+fn provider_order(pref: &str) -> [&str; 2] {
     match pref {
-        "musixmatch" => ["musixmatch", "lrclib", "genius"],
-        "genius" => ["genius", "lrclib", "musixmatch"],
-        _ => ["lrclib", "musixmatch", "genius"],
+        "musixmatch" => ["musixmatch", "lrclib"],
+        _ => ["lrclib", "musixmatch"],
     }
 }
 
@@ -749,7 +748,6 @@ fn fetch_auto(artist: &str, title: &str, duration: f64) -> Vec<LyricLine> {
     let cands: Vec<(i64, Option<Vec<LyricLine>>)> = vec![
         (90, crate::musixmatch::fetch_musixmatch(artist, title, duration)),
         (60, fetch_search_synced(artist, title, duration)),
-        (30, fetch_genius(artist, title, duration)),
     ];
     for (base, hit) in cands {
         if let Some(lines) = hit {
@@ -790,7 +788,6 @@ fn fetch_lyrics(
         for name in provider_order(&opts.provider) {
             let hit = match name {
                 "musixmatch" => crate::musixmatch::fetch_musixmatch(artist, title, duration),
-                "genius" => fetch_genius(artist, title, duration),
                 _ => {
                     let synced = fetch_synced(artist, title).unwrap_or_default();
                     if !synced.is_empty() {
@@ -824,108 +821,6 @@ fn fetch_lyrics(
         }
     }
     Vec::new()
-}
-
-const BROWSER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
-
-fn html_entity(s: &str) -> String {
-    s.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#x27;", "'")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-}
-
-fn extract_lyrics_div(html: &str) -> Option<String> {
-    let key = "data-lyrics-container=\"true\"";
-    let start = html.find(key)?;
-    let mut tag_end = html[start..].find('>')?;
-    tag_end += start;
-    let mut depth = 1usize;
-    let mut o = String::new();
-    let bytes = html.as_bytes();
-    let mut i = tag_end + 1;
-    while i < bytes.len() && depth > 0 {
-        if html[i..].starts_with("</div") {
-            depth -= 1;
-            if let Some(end) = html[i..].find('>') {
-                i += end + 1;
-            } else {
-                break;
-            }
-        } else if html[i..].starts_with("<div") {
-            depth += 1;
-            if let Some(end) = html[i..].find('>') {
-                i += end + 1;
-            } else {
-                break;
-            }
-        } else if html[i..].starts_with("<br") {
-            o.push('\n');
-            if let Some(end) = html[i..].find('>') {
-                i += end + 1;
-            } else {
-                break;
-            }
-        } else if bytes[i] == b'<' {
-            if let Some(end) = html[i..].find('>') {
-                i += end + 1;
-            } else {
-                break;
-            }
-        } else {
-            o.push(html[i..].chars().next()?);
-            i += html[i..].chars().next()?.len_utf8();
-        }
-    }
-    if depth != 0 {
-        return None;
-    }
-    Some(o)
-}
-
-fn fetch_genius(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
-    if duration < 30.0 {
-        return None;
-    }
-    let artist = sanitize_query(artist);
-    let title = sanitize_query(title);
-    if artist.is_empty() && title.is_empty() {
-        return None;
-    }
-    let url = format!(
-        "https://genius.com/api/search/multi?q={}%20{}",
-        url_encode(&artist),
-        url_encode(&title)
-    );
-    let body = cmd_out("curl", &["-fsSL", "-m", "15", "-A", BROWSER_UA, &url], 20000)?;
-    if body.trim_start().starts_with('<') {
-        return None;
-    }
-    let mut page_url = None;
-    for chunk in body.split("\"type\":\"song\"").skip(1) {
-        if let Some(u) = json_string(chunk, "url") {
-            if u.contains("genius.com/") && u.len() < 300 {
-                page_url = Some(u);
-                break;
-            }
-        }
-    }
-    let page_url = page_url?;
-    let html = cmd_out("curl", &["-fsSL", "-m", "20", "-A", BROWSER_UA, &page_url], 25000)?;
-    let raw = extract_lyrics_div(&html)?;
-    let texts: Vec<String> = html_entity(&raw)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    let lines = distribute_plain(texts, duration)?;
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines)
 }
 
 fn fetch_search_synced(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
@@ -1588,7 +1483,7 @@ mod interp_tests {
 
 #[cfg(test)]
 mod port_tests {
-    use super::{extract_lyrics_div, html_entity, levenshtein, sanitize_query, FetchOpts, LyricLine};
+    use super::{levenshtein, sanitize_query, FetchOpts, LyricLine};
     use crate::mpris::Track;
 
     fn line(t: f64, text: &str) -> LyricLine {
@@ -1606,14 +1501,6 @@ mod port_tests {
         assert_eq!(levenshtein("tyler", "tyler"), 0);
         assert_eq!(levenshtein("tylor", "tyler"), 1);
         assert!(levenshtein("coldplay yellow", "metallica nothing") > 10);
-    }
-
-    #[test]
-    fn genius_div_extracts_text() {
-        let html = "<html><body><div data-lyrics-container=\"true\">hello<br>world <b>bold</b></div><div>other</div></body></html>";
-        assert_eq!(extract_lyrics_div(html), Some("hello\nworld bold".to_string()));
-        assert_eq!(extract_lyrics_div("<html>nope</html>"), None);
-        assert_eq!(html_entity("a &amp; b &#x27; c &nbsp;d"), "a & b ' c  d");
     }
 
     #[test]

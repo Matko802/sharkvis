@@ -235,7 +235,7 @@ impl SettingsUi {
                 }
             }
             S_PROVIDER => {
-                const ORDER: [&str; 4] = ["auto", "lrclib", "musixmatch", "genius"];
+                const ORDER: [&str; 3] = ["auto", "lrclib", "musixmatch"];
                 let mut idx = 0;
                 for (i, name) in ORDER.iter().enumerate() {
                     if cfg.provider == *name {
@@ -595,7 +595,7 @@ mod tests {
         SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
         assert_eq!(cfg.provider, "auto");
         SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
-        assert_eq!(cfg.provider, "genius");
+        assert_eq!(cfg.provider, "musixmatch");
         SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
         assert_eq!(cfg.provider, "auto");
     }

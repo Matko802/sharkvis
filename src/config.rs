@@ -344,7 +344,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                 }
                 b"provider" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
-                    if v == "auto" || v == "genius" || v == "musixmatch" || v == "lrclib" {
+                    if v == "auto" || v == "musixmatch" || v == "lrclib" {
                         cfg.provider = v;
                     }
                 }
