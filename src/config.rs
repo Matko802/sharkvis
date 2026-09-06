@@ -41,6 +41,8 @@ pub struct Config {
     pub mode: String,
     pub sptlrx_text: String,
     pub text_source: String,
+    pub lyrics_folder: String,
+    pub mpris_players: String,
     pub glyphs: Vec<u8>,
 }
 
@@ -65,6 +67,8 @@ impl Default for Config {
             mode: "bars".to_string(),
             sptlrx_text: "SHARKVIS".to_string(),
             text_source: "static".to_string(),
+            lyrics_folder: String::new(),
+            mpris_players: String::new(),
             glyphs: DEFAULT_GLYPHS.to_vec(),
         }
     }
@@ -254,8 +258,19 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                 b"channels" => cfg.channels = geti(&val, cfg.channels as i64) as u32,
                 _ => {}
             },
-            b"color" => match key.as_slice() {
-                b"color_mode" => {
+            b"lyrics" => match key.as_slice() {
+                b"folder" => {
+                    cfg.lyrics_folder = String::from_utf8_lossy(&val).into_owned();
+                }
+                _ => {}
+            },
+            b"mpris" => match key.as_slice() {
+                b"players" => {
+                    cfg.mpris_players = String::from_utf8_lossy(&val).into_owned();
+                }
+                _ => {}
+            },
+            b"color" => match key.as_slice() {                b"color_mode" => {
                     let v = val.as_slice();
                     if v == b"256" || v == b"indexed" {
                         cfg.color_256 = true;
@@ -349,6 +364,12 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     let _ = f.write_all(out.as_bytes());
     let _ = f.write_all(&cfg.glyphs);
     let _ = f.write_all(b"\n");
+    let mut tail = String::new();
+    tail.push_str("\n[lyrics]\n");
+    tail.push_str(&format!("folder = {}\n", cfg.lyrics_folder));
+    tail.push_str("\n[mpris]\n");
+    tail.push_str(&format!("players = {}\n", cfg.mpris_players));
+    let _ = f.write_all(tail.as_bytes());
     out.clear();
     drop(f);
     true

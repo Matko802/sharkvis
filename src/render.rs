@@ -49,6 +49,8 @@ pub struct Renderer {
     sc_lo: Vec<i64>,
     sc_hi: Vec<i64>,
     text: Vec<char>,
+    text_dim: Vec<bool>,
+    focus: usize,
 }
 
 #[derive(Default)]
@@ -273,6 +275,8 @@ impl Renderer {
             sc_lo: Vec::new(),
             sc_hi: Vec::new(),
             text: "SHARKVIS".chars().collect(),
+            text_dim: Vec::new(),
+            focus: 0,
         };
         r.set_glyphs(None);
         r
@@ -332,9 +336,38 @@ impl Renderer {
     }
 
     pub fn set_text(&mut self, s: &str) {
-        let v: Vec<char> = s.chars().take(64).collect();
+        let v: Vec<char> = s.chars().take(512).collect();
         if self.text != v {
+            self.focus = v.len().saturating_sub(1);
             self.text = v;
+            self.text_dim.clear();
+            self.clear();
+        }
+    }
+
+    pub fn set_rich(&mut self, entries: &[(String, bool)]) {
+        let mut text = Vec::new();
+        let mut dim = Vec::new();
+        let mut focus = 0;
+        let mut found = false;
+        for (i, (s, cur)) in entries.iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+                dim.push(false);
+            }
+            if *cur && !found {
+                focus = text.len();
+                found = true;
+            }
+            for c in s.chars().take(512) {
+                text.push(c);
+                dim.push(!cur);
+            }
+        }
+        if self.text != text {
+            self.text = text;
+            self.text_dim = dim;
+            self.focus = focus;
             self.clear();
         }
     }
@@ -567,10 +600,31 @@ impl Renderer {
         if chars.is_empty() || region_w == 0 || rows == 0 {
             return (1, Vec::new());
         }
+        let mut paras: Vec<(usize, Vec<char>)> = Vec::new();
+        let mut start = 0;
+        for (i, c) in chars.iter().enumerate() {
+            if *c == '\n' {
+                paras.push((start, chars[start..i].to_vec()));
+                start = i + 1;
+            }
+        }
+        paras.push((start, chars[start..].to_vec()));
+        let wrap_all = |cap: usize| -> Vec<Vec<usize>> {
+            let mut lines = Vec::new();
+            for (base, pc) in paras.iter() {
+                for mut line in Self::wrap_chars(pc, cap) {
+                    for idx in line.iter_mut() {
+                        *idx += *base;
+                    }
+                    lines.push(line);
+                }
+            }
+            lines
+        };
         let max_s = (rows / 7).max(1);
         for s in (1..=max_s).rev() {
             let cap = ((region_w + s) / (6 * s)).max(1);
-            let lines = Self::wrap_chars(chars, cap);
+            let lines = wrap_all(cap);
             if lines.is_empty() {
                 continue;
             }
@@ -579,7 +633,7 @@ impl Renderer {
                 return (s, lines);
             }
         }
-        let lines = Self::wrap_chars(chars, ((region_w + 1) / 6).max(1));
+        let lines = wrap_all(((region_w + 1) / 6).max(1));
         let keep = (rows / 8).max(1);
         if lines.len() <= keep {
             return (1, lines);
@@ -636,7 +690,7 @@ impl Renderer {
             };
             mags[i] = (l + r) * 0.5;
         }
-        let (s, lines) = Self::layout_text(&text, region_w, rows, m.saturating_sub(1));
+        let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus);
         if lines.is_empty() {
             return;
         }
@@ -644,6 +698,7 @@ impl Renderer {
         let top = rows.saturating_sub(total_h) / 2;
         let x_end = (x_start + region_w).min(cols);
         let full = self.render_glyph(8).to_vec();
+        let dim = self.text_dim.clone();
         let mut boxes: Vec<(usize, usize, usize)> = Vec::new();
         for (li, line) in lines.iter().enumerate() {
             if line.is_empty() {
@@ -653,7 +708,7 @@ impl Renderer {
             let lead = region_w.saturating_sub(wline) / 2;
             let y0 = top + li * 8 * s;
             for (k, &ci) in line.iter().enumerate() {
-                let mut v = mags[ci];
+                let mut v = mags[ci] * if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
                 if !(v > 0.0) {
                     v = 0.0;
                 } else if v > 1.0 {

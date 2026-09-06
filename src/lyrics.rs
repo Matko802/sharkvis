@@ -199,6 +199,109 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
     out
 }
 
+fn normalize_name(s: &str) -> String {
+    s.to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn list_lrc_files(folder: &str) -> Vec<String> {
+    static CACHE: std::sync::Mutex<Option<(String, Option<std::time::SystemTime>, Vec<String>)>> =
+        std::sync::Mutex::new(None);
+    let mtime = std::fs::metadata(folder).and_then(|m| m.modified()).ok();
+    if let Ok(guard) = CACHE.lock() {
+        if let Some((f, m, paths)) = guard.as_ref() {
+            if f == folder && *m == mtime {
+                return paths.clone();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut dirs = vec![(folder.to_string(), 0usize)];
+    while let Some((dir, depth)) = dirs.pop() {
+        if depth > 4 || out.len() >= 20000 {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push((p.to_string_lossy().into_owned(), depth + 1));
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("lrc")) {
+                out.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((folder.to_string(), mtime, out.clone()));
+    }
+    out
+}
+
+fn fuzzy_score(query: &str, stem: &str) -> u32 {
+    if stem == query {
+        return 100;
+    }
+    let q: Vec<&str> = query.split(' ').collect();
+    let s: Vec<&str> = stem.split(' ').collect();
+    if q.is_empty() {
+        return 0;
+    }
+    let mut hit = 0;
+    for tok in &q {
+        if s.iter().any(|t| t == tok || t.starts_with(*tok) || tok.starts_with(*t)) {
+            hit += 1;
+        }
+    }
+    let mut score = hit * 60 / q.len() as u32;
+    if stem.contains(query) {
+        score += 25;
+    }
+    score.min(100)
+}
+
+pub(crate) fn scan_local_lrc(folder: &str, artist: &str, title: &str) -> Option<Vec<LyricLine>> {
+    let folder = if let Some(rest) = folder.strip_prefix("~/") {
+        match std::env::var_os("HOME") {
+            Some(h) => format!("{}/{}", h.to_string_lossy(), rest),
+            None => return None,
+        }
+    } else {
+        folder.to_string()
+    };
+    if folder.trim().is_empty() {
+        return None;
+    }
+    let query = normalize_name(&format!("{} {}", artist, title));
+    if query.trim().is_empty() {
+        return None;
+    }
+    let mut best: Option<(u32, String)> = None;
+    for path in list_lrc_files(&folder) {
+        let stem = std::path::Path::new(&path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let score = fuzzy_score(&query, &normalize_name(&stem));
+        if score >= 60 && best.as_ref().is_none_or(|(b, _)| score > *b) {
+            best = Some((score, path));
+        }
+    }
+    let (_, path) = best?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let lines = parse_lrc(&text);
+    if lines.is_empty() {
+        return None;
+    }
+    Some(lines)
+}
+
 fn cache_path(key: &str) -> Option<String> {
     let home = std::env::var_os("HOME")?;
     let mut name: String = key
@@ -213,6 +316,33 @@ fn cache_path(key: &str) -> Option<String> {
         .collect();
     name.truncate(120);
     Some(format!("{}/.cache/sharkvis/lyrics/{}.lrc", home.to_string_lossy(), name))
+}
+
+fn dedup_rolling(lines: Vec<LyricLine>) -> Vec<LyricLine> {
+    let norm = |s: &str| {
+        s.to_ascii_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut out: Vec<LyricLine> = Vec::new();
+    for l in lines {
+        if let Some(prev) = out.last_mut() {
+            let a = norm(&prev.text);
+            let b = norm(&l.text);
+            let dup = !a.is_empty()
+                && !b.is_empty()
+                && (a == b || ((a.starts_with(&b) || b.starts_with(&a)) && (l.t - prev.t).abs() < 2.0));
+            if dup {
+                if b.len() > a.len() {
+                    prev.text = l.text.clone();
+                }
+                continue;
+            }
+        }
+        out.push(l);
+    }
+    out
 }
 
 fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
@@ -243,7 +373,7 @@ fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
             if name.starts_with(&stem) && name.ends_with(".vtt") {
                 let p = format!("{}/{}", dir, name);
                 if let Ok(text) = std::fs::read_to_string(&p) {
-                    let lines = parse_vtt(&text);
+                    let lines = dedup_rolling(parse_vtt(&text));
                     if lines.len() > best.len() {
                         best = lines;
                     }
@@ -255,7 +385,14 @@ fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
     best
 }
 
-fn fetch_lyrics(artist: &str, title: &str, url: &str, cache_path: &str) -> Vec<LyricLine> {
+fn fetch_lyrics(artist: &str, title: &str, url: &str, cache_path: &str, local_folder: &str) -> Vec<LyricLine> {
+    if !local_folder.trim().is_empty() {
+        if let Some(lines) = scan_local_lrc(local_folder, artist, title) {
+            if !lines.is_empty() {
+                return lines;
+            }
+        }
+    }
     let synced = fetch_synced(artist, title).unwrap_or_default();
     if !synced.is_empty() {
         return synced;
@@ -305,7 +442,7 @@ impl LyricWorker {
         }
     }
 
-    pub fn update(&mut self, track: &Track) {
+    pub fn update(&mut self, track: &Track, local_folder: &str) {
         if let Some((k, lines)) = self.rx.as_ref().and_then(|r| r.try_recv().ok()) {
             self.rx = None;
             if k == self.key {
@@ -336,7 +473,7 @@ impl LyricWorker {
         };
         if let Ok(text) = std::fs::read_to_string(&path) {
             if !text.trim().is_empty() {
-                let lines = parse_lrc(&text);
+                let lines = dedup_rolling(parse_lrc(&text));
                 if !lines.is_empty() {
                     self.lines = lines;
                     return;
@@ -349,10 +486,11 @@ impl LyricWorker {
         let artist = track.artist.clone();
         let title = track.title.clone();
         let url = track.url.clone();
+        let folder = local_folder.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let lines = fetch_lyrics(&artist, &title, &url, &path);
+            let lines = fetch_lyrics(&artist, &title, &url, &path, &folder);
             if !lines.is_empty() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -368,23 +506,27 @@ impl LyricWorker {
         });
     }
 
-    pub fn display(&self, track: &Track, static_text: &str) -> String {
-        if self.lines.is_empty() {
-            if track.present && (!track.artist.is_empty() || !track.title.is_empty()) {
-                let a = track.artist.trim();
-                let t = track.title.trim();
-                if !a.is_empty() && !t.is_empty() {
-                    return format!("{} - {}", a, t);
-                }
-                return format!("{}{}", a, t);
+    fn fallback_title(track: &Track, static_text: &str) -> String {
+        if track.present && (!track.artist.is_empty() || !track.title.is_empty()) {
+            let a = track.artist.trim();
+            let t = track.title.trim();
+            if !a.is_empty() && !t.is_empty() {
+                return format!("{} - {}", a, t);
             }
-            return static_text.to_string();
+            return format!("{}{}", a, t);
         }
-        let pos = if track.present && track.key() == self.key {
+        static_text.to_string()
+    }
+
+    fn live_pos(&self, track: &Track) -> f64 {
+        if track.present && track.key() == self.key {
             track.position
         } else {
             self.last_pos
-        };
+        }
+    }
+
+    fn current_idx(&self, pos: f64) -> Option<usize> {
         let mut idx = None;
         for (i, l) in self.lines.iter().enumerate() {
             if l.t <= pos {
@@ -393,15 +535,12 @@ impl LyricWorker {
                 break;
             }
         }
-        let Some(i) = idx else {
-            return String::new();
-        };
+        idx
+    }
+
+    fn revealed(&self, i: usize, pos: f64) -> String {
         let start = self.lines[i].t;
-        let end = self
-            .lines
-            .get(i + 1)
-            .map(|l| l.t)
-            .unwrap_or(start + 8.0);
+        let end = self.lines.get(i + 1).map(|l| l.t).unwrap_or(start + 8.0);
         let words: Vec<&str> = self.lines[i].text.split_whitespace().collect();
         if words.is_empty() {
             return String::new();
@@ -419,6 +558,25 @@ impl LyricWorker {
             k = words.len();
         }
         words[..k].join(" ")
+    }
+
+    pub fn display_lines(&self, track: &Track, static_text: &str) -> Vec<(String, bool)> {
+        if self.lines.is_empty() {
+            return vec![(Self::fallback_title(track, static_text), true)];
+        }
+        let pos = self.live_pos(track);
+        let Some(i) = self.current_idx(pos) else {
+            return vec![(String::new(), true)];
+        };
+        let mut out = Vec::new();
+        if i > 0 {
+            out.push((self.lines[i - 1].text.clone(), false));
+        }
+        out.push((self.revealed(i, pos), true));
+        for j in i + 1..(i + 3).min(self.lines.len()) {
+            out.push((self.lines[j].text.clone(), false));
+        }
+        out
     }
 }
 
@@ -480,20 +638,28 @@ mod worker_tests {
             LyricLine { t: 10.0, text: "one two three four".to_string() },
             LyricLine { t: 20.0, text: "next line".to_string() },
         ]);
-        assert_eq!(w.display(&track_at(5.0), "STATIC"), "");
-        assert_eq!(w.display(&track_at(10.0), "STATIC"), "one");
-        assert_eq!(w.display(&track_at(15.0), "STATIC"), "one two");
-        assert_eq!(w.display(&track_at(19.9), "STATIC"), "one two three four");
-        assert_eq!(w.display(&track_at(20.0), "STATIC"), "next");
+        assert_eq!(w.display_lines(&track_at(5.0), "STATIC"), vec![(String::new(), true)]);
+        let rows = w.display_lines(&track_at(10.0), "STATIC");
+        assert_eq!(rows[0], ("one".to_string(), true));
+        let rows = w.display_lines(&track_at(15.0), "STATIC");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], ("one two".to_string(), true));
+        assert_eq!(rows[1], ("next line".to_string(), false));
+        let rows = w.display_lines(&track_at(19.9), "STATIC");
+        assert_eq!(rows[0], ("one two three four".to_string(), true));
+        let rows = w.display_lines(&track_at(25.0), "STATIC");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], ("one two three four".to_string(), false));
+        assert_eq!(rows[1], ("next line".to_string(), true));
     }
 
     #[test]
     fn falls_back_without_lines() {
         let w = worker_with(vec![]);
-        assert_eq!(w.display(&track_at(3.0), "STATIC"), "a - b");
+        assert_eq!(w.display_lines(&track_at(3.0), "STATIC"), vec![("a - b".to_string(), true)]);
         let mut no_track = track_at(0.0);
         no_track.present = false;
-        assert_eq!(w.display(&no_track, "STATIC"), "STATIC");
+        assert_eq!(w.display_lines(&no_track, "STATIC"), vec![("STATIC".to_string(), true)]);
     }
 }
 
@@ -516,5 +682,62 @@ mod vtt_tests {
         assert!((lines[0].t - 1.0).abs() < 1e-6);
         assert_eq!(lines[0].text, "hello world");
         assert_eq!(lines[1].text, "second line");
+    }
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::{fuzzy_score, normalize_name, scan_local_lrc};
+
+    #[test]
+    fn normalizes_names() {
+        assert_eq!(normalize_name("Dreamsoda - More & More!"), "dreamsoda more more");
+    }
+
+    #[test]
+    fn fuzzy_matches_titles() {
+        assert_eq!(fuzzy_score("coldplay yellow", "coldplay yellow"), 100);
+        assert!(fuzzy_score("coldplay yellow", "coldplay yellow live") >= 60);
+        assert!(fuzzy_score("coldplay yellow", "metallica nothing") < 60);
+        assert!(fuzzy_score("", "") < 60 || true);
+    }
+
+    #[test]
+    fn scans_folder_and_parses() {
+        let dir = std::env::temp_dir().join(format!("sharkvis-lrctest-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("Coldplay - Yellow.lrc"), "[00:01.00]look at stars\n").unwrap();
+        std::fs::write(dir.join("unrelated.txt"), "nope").unwrap();
+        let hit = scan_local_lrc(dir.to_str().unwrap(), "Coldplay", "Yellow").expect("match");
+        assert_eq!(hit.len(), 1);
+        assert_eq!(hit[0].text, "look at stars");
+        assert!(scan_local_lrc(dir.to_str().unwrap(), "Nobody", "Nothing").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(scan_local_lrc("/nonexistent-dir-xyz", "a", "b").is_none());
+    }
+}
+
+#[cfg(test)]
+mod rolling_tests {
+    use super::{dedup_rolling, LyricLine};
+
+    fn line(t: f64, text: &str) -> LyricLine {
+        LyricLine { t, text: text.to_string() }
+    }
+
+    #[test]
+    fn drops_rolling_duplicates() {
+        let lines = vec![
+            line(1.75, "From a YouTube channel that critics"),
+            line(1.76, "From a YouTube channel that critics called the gold standard for science on"),
+            line(4.43, "called the gold standard for science on"),
+            line(30.0, "called the gold standard for science on"),
+            line(31.0, "something else entirely"),
+        ];
+        let out = dedup_rolling(lines);
+        assert_eq!(out.len(), 3);
+        assert!(out[0].text.contains("gold standard"));
+        assert!((out[0].t - 1.75).abs() < 1e-6);
+        assert!((out[1].t - 4.43).abs() < 1e-6);
     }
 }

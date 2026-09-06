@@ -51,6 +51,33 @@ The config file is looked up in `$SHARKVIS_CONFIG`, then
 `~/.config/sharkvis/config`, then `./config`. Settings changed in the panel
 are saved automatically when you close the panel or quit.
 
+## Modes
+
+`bars`, `wave`, `oscilloscope`, `text` (switch in the panel with `g`).
+`text` renders a big block-letter word, each letter lit by its own
+frequency bin. With `text_source = lyrics` it shows synced karaoke lines
+instead: previous line dim, current line bright with words revealed in
+time, next lines dim.
+
+```ini
+[visualizer]
+mode = text
+text = SHARKVIS
+text_source = lyrics
+
+[lyrics]
+folder = ~/Music
+
+[mpris]
+players = firefox,spotify
+```
+
+Lyrics sources, in order: local `.lrc` files under `folder` (fuzzy
+matched on artist + title), [lrclib.net](https://lrclib.net), then YouTube
+auto-captions via `yt-dlp` when the player exposes the video URL.
+Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
+whitelists MPRIS players (first playing match wins); empty means any.
+
 ## Update
 
 Nix flake:

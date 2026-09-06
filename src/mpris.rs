@@ -62,11 +62,14 @@ pub(crate) fn cmd_out(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<Strin
     String::from_utf8(out).ok().map(|s| s.trim().to_string())
 }
 
-fn playing_player() -> Option<String> {
+fn playing_player(allow: &[String]) -> Option<String> {
     let list = cmd_out("playerctl", &["-l"], 500)?;
     for line in list.lines() {
         let p = line.trim();
         if p.is_empty() {
+            continue;
+        }
+        if !allow.is_empty() && !allow.iter().any(|a| p == a || p.starts_with(a)) {
             continue;
         }
         if let Some(st) = cmd_out("playerctl", &["-p", p, "status"], 500) {
@@ -78,9 +81,9 @@ fn playing_player() -> Option<String> {
     None
 }
 
-pub fn poll_track() -> Track {
+pub fn poll_track(allow: &[String]) -> Track {
     let mut t = Track::default();
-    let Some(player) = playing_player() else {
+    let Some(player) = playing_player(allow) else {
         return t;
     };
     let meta = cmd_out(

@@ -629,16 +629,21 @@ fn main() {
 
         if last_track_poll.elapsed() >= Duration::from_millis(500) {
             last_track_poll = Instant::now();
-            track = poll_track();
+            let allow: Vec<String> = cfg
+                .mpris_players
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            track = poll_track(&allow);
         }
-        lyric.update(&track);
+        lyric.update(&track, &cfg.lyrics_folder);
         if rnd.mode == RenderMode::Text {
-            let s = if cfg.text_source == "lyrics" {
-                lyric.display(&track, &cfg.sptlrx_text)
+            if cfg.text_source == "lyrics" {
+                rnd.set_rich(&lyric.display_lines(&track, &cfg.sptlrx_text));
             } else {
-                cfg.sptlrx_text.clone()
-            };
-            rnd.set_text(&s);
+                rnd.set_text(&cfg.sptlrx_text);
+            }
         }
 
         let mut need_draw = force_draw || in_settings;
