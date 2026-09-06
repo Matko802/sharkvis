@@ -647,6 +647,8 @@ fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> 
     let mut args = vec![
         "--skip-download",
         "--no-playlist",
+        "--socket-timeout",
+        "15",
         "--write-auto-subs",
         "--write-subs",
         "--sub-langs",
@@ -1087,10 +1089,18 @@ impl LyricWorker {
     }
 
     fn update_meta(&mut self, track: &Track, opts: &FetchOpts) {
-        if let Some((k, lines)) = self.rx.as_ref().and_then(|r| r.try_recv().ok()) {
-            self.rx = None;
-            if k == self.key {
-                self.lines = lines;
+        if let Some(rx) = self.rx.as_ref() {
+            match rx.try_recv() {
+                Ok((k, lines)) => {
+                    self.rx = None;
+                    if k == self.key {
+                        self.lines = lines;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
         let tkey = track.key();
@@ -1413,6 +1423,17 @@ mod worker_tests {
             w.display_context(&track_at(45.0), "STATIC"),
             vec![("second".to_string(), false), ("third".to_string(), true)]
         );
+    }
+
+    #[test]
+    fn dead_fetch_thread_releases_for_retry() {
+        let mut w = worker_with(vec![]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        w.rx = Some(rx);
+        w.last_attempt = Some(Instant::now());
+        w.update_meta(&track_at(1.0), &FetchOpts::default());
+        assert!(w.rx.is_none(), "disconnected fetch must clear so retries resume");
     }
 }
 

@@ -27,13 +27,19 @@ impl Track {
 }
 
 pub(crate) fn cmd_out(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<String> {
-    let mut child = std::process::Command::new(cmd)
-        .args(args)
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new(cmd);
+    cmd.args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+        .stderr(std::process::Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().ok()?;
     let pid = child.id() as libc::pid_t;
     let out = std::thread::scope(|s| {
         let h = s.spawn(|| {
@@ -52,7 +58,7 @@ pub(crate) fn cmd_out(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<Strin
             }
             if start.elapsed() > Duration::from_millis(timeout_ms) {
                 unsafe {
-                    libc::kill(pid, libc::SIGKILL);
+                    libc::kill(-pid, libc::SIGKILL);
                 }
                 return None;
             }
@@ -153,4 +159,20 @@ pub fn poll_position(player: &str) -> Option<f64> {
     }
     cmd_out("playerctl", &["-p", player, "position"], 300)
         .and_then(|s| s.parse::<f64>().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmd_out_kills_process_group() {
+        let start = Instant::now();
+        let r = cmd_out("sh", &["-c", "sleep 30"], 200);
+        assert!(r.is_none());
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "timeout must reap grandchildren holding the pipe"
+        );
+    }
 }
