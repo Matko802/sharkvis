@@ -2,10 +2,17 @@ use std::time::{Duration, Instant};
 
 use crate::mpris::{cmd_out, Track};
 
+#[derive(Clone, Default, PartialEq)]
+pub struct LyricWord {
+    pub t: f64,
+    pub text: String,
+}
+
 #[derive(Clone, Default)]
 pub struct LyricLine {
     pub t: f64,
     pub text: String,
+    pub words: Vec<LyricWord>,
 }
 
 pub(crate) fn url_encode(s: &str) -> String {
@@ -243,7 +250,26 @@ pub(crate) fn parse_lrc(text: &str) -> Vec<LyricLine> {
             continue;
         }
         for t in times {
-            out.push(LyricLine { t: t + offset, text: text.clone() });
+            let t = t + offset;
+            let (pairs, saw) = split_inline_times(&text, t);
+            if pairs.is_empty() {
+                continue;
+            }
+            let clean = pairs
+                .iter()
+                .map(|(_, w)| w.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let clean = if clean.is_empty() { text.clone() } else { clean };
+            let words = if saw {
+                pairs
+                    .into_iter()
+                    .map(|(wt, w)| LyricWord { t: wt, text: w })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            out.push(LyricLine { t, text: clean, words });
         }
     }
     out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
@@ -270,37 +296,84 @@ fn parse_vtt_time(s: &str) -> Option<f64> {
     Some(secs)
 }
 
-fn strip_vtt_tags(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    let mut tag = false;
-    for c in s.chars() {
-        match c {
-            '<' => tag = true,
-            '>' => {
-                tag = false;
-                o.push(' ');
+fn parse_tag_time(tag: &str) -> Option<f64> {
+    let tag = tag.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    parse_vtt_time(tag).or_else(|| {
+        if tag.contains(':') {
+            parse_time(tag)
+        } else {
+            None
+        }
+    })
+}
+
+fn split_inline_times(s: &str, base: f64) -> (Vec<(f64, String)>, bool) {
+    let mut out: Vec<(f64, String)> = Vec::new();
+    let mut cur = base;
+    let mut saw = false;
+    let mut rest = s;
+    while let Some(lt) = rest.find('<') {
+        let head = &rest[..lt];
+        for w in head.split_whitespace() {
+            out.push((cur, w.to_string()));
+        }
+        let after = &rest[lt + 1..];
+        match after.find('>') {
+            Some(end) => {
+                let tag = &after[..end];
+                if let Some(t) = parse_tag_time(tag) {
+                    saw = true;
+                    cur = t;
+                }
+                rest = &after[end + 1..];
             }
-            _ if !tag => o.push(c),
-            _ => {}
+            None => {
+                rest = "";
+                break;
+            }
         }
     }
-    o.split_whitespace().collect::<Vec<_>>().join(" ")
+    for w in rest.split_whitespace() {
+        out.push((cur, w.to_string()));
+    }
+    (out, saw)
 }
 
 pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
     let mut out = Vec::new();
     let mut cur_start: Option<f64> = None;
     let mut cur_text = String::new();
+    let flush = |start: &mut Option<f64>, text: &mut String, out: &mut Vec<LyricLine>| {
+        if let Some(t) = start.take() {
+            let (pairs, saw) = split_inline_times(text.trim(), t);
+            if pairs.is_empty() {
+                text.clear();
+                return;
+            }
+            let clean = pairs
+                .iter()
+                .map(|(_, w)| w.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let words = if saw {
+                pairs
+                    .into_iter()
+                    .map(|(wt, w)| LyricWord { t: wt, text: w })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            out.push(LyricLine { t, text: clean, words });
+        }
+        text.clear();
+    };
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() {
-            if let Some(t) = cur_start.take() {
-                let clean = strip_vtt_tags(cur_text.trim());
-                if !clean.is_empty() {
-                    out.push(LyricLine { t, text: clean });
-                }
-            }
-            cur_text.clear();
+            flush(&mut cur_start, &mut cur_text, &mut out);
             continue;
         }
         if line == "WEBVTT" || line.starts_with("Kind:") || line.starts_with("Language:") {
@@ -312,13 +385,7 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
             continue;
         }
         if let Some(pos) = line.find("-->") {
-            if let Some(t) = cur_start.take() {
-                let clean = strip_vtt_tags(cur_text.trim());
-                if !clean.is_empty() {
-                    out.push(LyricLine { t, text: clean });
-                }
-            }
-            cur_text.clear();
+            flush(&mut cur_start, &mut cur_text, &mut out);
             let left = line[..pos].trim();
             cur_start = parse_vtt_time(left);
             continue;
@@ -330,12 +397,7 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
             cur_text.push_str(line);
         }
     }
-    if let Some(t) = cur_start.take() {
-        let clean = strip_vtt_tags(cur_text.trim());
-        if !clean.is_empty() {
-            out.push(LyricLine { t, text: clean });
-        }
-    }
+    flush(&mut cur_start, &mut cur_text, &mut out);
     out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
     out
 }
@@ -443,6 +505,30 @@ pub(crate) fn scan_local_lrc(folder: &str, artist: &str, title: &str) -> Option<
     Some(lines)
 }
 
+fn fmt_ts(t: f64) -> String {
+    let t = t.max(0.0);
+    format!("[{:02}:{:05.2}]", t as u32 / 60, t % 60.0)
+}
+
+fn serialize_lrc(lines: &[LyricLine]) -> String {
+    lines
+        .iter()
+        .map(|l| {
+            if l.words.is_empty() {
+                format!("{}{}", fmt_ts(l.t), l.text)
+            } else {
+                let mut s = fmt_ts(l.t);
+                for w in &l.words {
+                    let tag = fmt_ts(w.t);
+                    s.push_str(&format!("<{}>{} ", &tag[1..tag.len() - 1], w.text));
+                }
+                s.trim_end().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn cache_path(key: &str) -> Option<String> {
     let home = std::env::var_os("HOME")?;
     let mut name: String = key
@@ -477,6 +563,7 @@ fn dedup_rolling(lines: Vec<LyricLine>) -> Vec<LyricLine> {
             if dup {
                 if b.len() > a.len() {
                     prev.text = l.text.clone();
+                    prev.words = l.words.clone();
                 }
                 continue;
             }
@@ -726,13 +813,12 @@ fn distribute_plain(texts: Vec<String>, duration: f64) -> Option<Vec<LyricLine>>
         return None;
     }
     let step = duration / texts.len() as f64;
-    Some(
-        texts
-            .into_iter()
-            .enumerate()
-            .map(|(i, text)| LyricLine { t: i as f64 * step, text })
-            .collect(),
-    )
+    let out: Vec<LyricLine> = texts
+        .into_iter()
+        .enumerate()
+        .map(|(i, text)| LyricLine { t: i as f64 * step, text, words: Vec::new() })
+        .collect();
+    Some(out)
 }
 
 fn fetch_search_plain(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
@@ -946,12 +1032,7 @@ impl LyricWorker {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                let raw: String = lines
-                    .iter()
-                    .map(|l| format!("[{:02}:{:05.2}]{}", l.t as u32 / 60, l.t % 60.0, l.text))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let _ = std::fs::write(&path, raw);
+                let _ = std::fs::write(&path, serialize_lrc(&lines));
             }
             let _ = tx.send((key, lines));
         });
@@ -979,37 +1060,6 @@ impl LyricWorker {
         self.live_position()
     }
 
-    fn current_idx(&self, pos: f64) -> Option<usize> {
-        let mut idx = None;
-        for (i, l) in self.lines.iter().enumerate() {
-            if l.t <= pos {
-                idx = Some(i);
-            } else {
-                break;
-            }
-        }
-        idx
-    }
-
-    fn revealed_count(&self, i: usize, pos: f64) -> usize {
-        let start = self.lines[i].t;
-        let end = self.lines.get(i + 1).map(|l| l.t).unwrap_or(start + 8.0);
-        let words: Vec<&str> = self.lines[i].text.split_whitespace().collect();
-        if words.is_empty() {
-            return 0;
-        }
-        let frac = if end > start {
-            ((pos - start) / (end - start)).clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
-        let mut k = (frac * words.len() as f64).ceil() as usize;
-        if k < 1 {
-            k = 1;
-        }
-        k.min(words.len())
-    }
-
     pub fn display_lines(&self, track: &Track, static_text: &str) -> Vec<(String, bool)> {
         if self.lines.is_empty() {
             return vec![(Self::fallback_title(track, static_text), true)];
@@ -1020,15 +1070,42 @@ impl LyricWorker {
             self.live_pos(track)
         };
         pos += self.offset_ms as f64 / 1000.0;
-        let Some(i) = self.current_idx(pos) else {
-            return vec![(String::new(), true)];
-        };
-        let words: Vec<&str> = self.lines[i].text.split_whitespace().collect();
-        if words.is_empty() {
-            return vec![(String::new(), true)];
+        let mut current: Option<String> = None;
+        for (i, line) in self.lines.iter().enumerate() {
+            if !line.words.is_empty() {
+                for w in &line.words {
+                    if w.t <= pos {
+                        current = Some(w.text.clone());
+                    }
+                }
+                continue;
+            }
+            let tokens: Vec<&str> = line.text.split_whitespace().collect();
+            if tokens.is_empty() {
+                continue;
+            }
+            let end = self.lines.get(i + 1).map(|l| l.t).unwrap_or(line.t + 8.0);
+            if pos < line.t {
+                continue;
+            }
+            let frac = if end > line.t {
+                ((pos - line.t) / (end - line.t)).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let mut k = (frac * tokens.len() as f64).ceil() as usize;
+            if k < 1 {
+                k = 1;
+            }
+            if k > tokens.len() {
+                k = tokens.len();
+            }
+            current = Some(tokens[k - 1].to_string());
         }
-        let k = self.revealed_count(i, pos).min(words.len()).max(1) - 1;
-        vec![(words[k].to_string(), true)]
+        match current {
+            Some(w) => vec![(w, true)],
+            None => vec![(String::new(), true)],
+        }
     }
 }
 
@@ -1045,6 +1122,30 @@ mod tests {
         assert_eq!(lines[0].text, "Look at the stars");
         assert!((lines[1].t - 15.5).abs() < 1e-6);
         assert!((lines[3].t - 20.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn lrc_inline_word_times() {
+        let lrc = "[00:10.00]one <00:11.00>two <00:13.50>three\n[00:20.00]plain line here\n";
+        let lines = parse_lrc(lrc);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].words.len(), 3);
+        assert!((lines[0].words[0].t - 10.0).abs() < 1e-6);
+        assert!((lines[0].words[1].t - 11.0).abs() < 1e-6);
+        assert!((lines[0].words[2].t - 13.5).abs() < 1e-6);
+        assert_eq!(lines[0].text, "one two three");
+        assert!(lines[1].words.is_empty());
+    }
+
+    #[test]
+    fn cache_round_trip_keeps_word_times() {
+        let lrc = "[00:10.00]one <00:11.00>two\n";
+        let lines = parse_lrc(lrc);
+        let back = parse_lrc(&serialize_lrc(&lines));
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].words.len(), 2);
+        assert!((back[0].words[1].t - 11.0).abs() < 1e-6);
+        assert_eq!(back[0].words[1].text, "two");
     }
 
     #[test]
@@ -1096,8 +1197,8 @@ mod worker_tests {
     #[test]
     fn shows_only_current_word() {
         let mut w = worker_with(vec![
-            LyricLine { t: 10.0, text: "one two three four".to_string() },
-            LyricLine { t: 20.0, text: "next line".to_string() },
+            LyricLine { t: 10.0, text: "one two three four".to_string(), words: Vec::new() },
+            LyricLine { t: 20.0, text: "next line".to_string(), words: Vec::new() },
         ]);
         w.update_pos(5.0);
         assert_eq!(w.display_lines(&track_at(5.0), "STATIC"), vec![(String::new(), true)]);
@@ -1144,6 +1245,17 @@ mod vtt_tests {
         assert_eq!(lines[0].text, "hello world");
         assert_eq!(lines[1].text, "second line");
     }
+
+    #[test]
+    fn vtt_word_times_exact() {
+        let vtt = "WEBVTT\n\n00:01.000 --> 00:03.000\n<c>hello <00:01.500>world <00:02.700>again</c>\n";
+        let lines = parse_vtt(vtt);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].words.len(), 3);
+        assert!((lines[0].words[0].t - 1.0).abs() < 1e-6);
+        assert!((lines[0].words[1].t - 1.5).abs() < 1e-6);
+        assert!((lines[0].words[2].t - 2.7).abs() < 1e-6);
+    }
 }
 
 #[cfg(test)]
@@ -1183,7 +1295,7 @@ mod rolling_tests {
     use super::{dedup_rolling, LyricLine};
 
     fn line(t: f64, text: &str) -> LyricLine {
-        LyricLine { t, text: text.to_string() }
+        LyricLine { t, text: text.to_string(), words: Vec::new() }
     }
 
     #[test]
@@ -1256,7 +1368,7 @@ mod port_tests {
     use crate::mpris::Track;
 
     fn line(t: f64, text: &str) -> LyricLine {
-        LyricLine { t, text: text.to_string() }
+        LyricLine { t, text: text.to_string(), words: Vec::new() }
     }
 
     #[test]
