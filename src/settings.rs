@@ -237,10 +237,10 @@ impl SettingsUi {
                 }
             }
             S_PROVIDER => {
-                let v = if cfg.provider == "genius" {
-                    "lrclib".to_string()
-                } else {
-                    "genius".to_string()
+                let v = match cfg.provider.as_str() {
+                    "lrclib" => "musixmatch".to_string(),
+                    "musixmatch" => "genius".to_string(),
+                    _ => "lrclib".to_string(),
                 };
                 if v != cfg.provider {
                     cfg.provider = v;

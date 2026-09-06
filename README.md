@@ -75,11 +75,14 @@ players = firefox,spotify
 
 Lyrics sources, in order: local `.lrc` files under `folder` (fuzzy
 matched on artist + title), [lrclib.net](https://lrclib.net) (exact, then
-scored search), [Genius](https://genius.com) (no token needed, plain
+duration-scored search), [Musixmatch](https://www.musixmatch.com) (anonymous
+token, no account needed — true word-level Richsync timing when
+available), [Genius](https://genius.com) (no token needed, plain
 lyrics spread over the track), then YouTube auto-captions via `yt-dlp`
 (from the player URL, else a duration-guarded search).
 Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
-whitelists MPRIS players (first playing match wins); empty means any.
+whitelists MPRIS players (first playing match wins, `playerctld`
+preferred); empty means any. `p` cycles the preferred provider.
 
 Untrusted sources (everything except local files and synced lrclib)
 are cleaned up by a local Ollama model (`fix lyrics` on by default,

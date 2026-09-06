@@ -43,7 +43,37 @@ pub(crate) fn sanitize_query(s: &str) -> String {
             _ => {}
         }
     }
-    o.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut o: String = o.split_whitespace().collect::<Vec<_>>().join(" ");
+    for suffix in [
+        " - remaster",
+        " - remastered",
+        " - remastered version",
+        " - live",
+        " - acoustic",
+        " - demo",
+    ] {
+        if let Some(base) = o.to_ascii_lowercase().strip_suffix(suffix) {
+            if !base.trim().is_empty() {
+                o.truncate(base.len());
+                o = o.trim_end().to_string();
+            }
+        }
+    }
+    o
+}
+
+fn canonical_char(c: char) -> char {
+    match c {
+        '\u{2018}' | '\u{2019}' | '\u{201B}' | '`' => '\'',
+        '\u{201C}' | '\u{201D}' => '"',
+        '\u{2013}' | '\u{2014}' | '\u{2015}' | '\u{FE58}' | '\u{FE63}' | '\u{FF0D}' => '-',
+        '\u{00A0}' | '\u{2007}' | '\u{202F}' => ' ',
+        _ => c,
+    }
+}
+
+pub(crate) fn canonicalize(s: &str) -> String {
+    s.chars().map(canonical_char).collect()
 }
 
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -168,6 +198,18 @@ fn best_plain(hits: &[SearchHit], q_artist: &str, q_title: &str, q_dur: f64) -> 
         .map(|l| l.trim().to_string())
         .collect();
     distribute_plain(texts, q_dur)
+}
+
+pub(crate) fn json_escape(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            _ => o.push(c),
+        }
+    }
+    o
 }
 
 pub(crate) fn json_string(src: &str, key: &str) -> Option<String> {
@@ -403,7 +445,7 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
 }
 
 fn normalize_name(s: &str) -> String {
-    s.to_ascii_lowercase()
+    canonicalize(&s.to_ascii_lowercase())
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
         .collect::<String>()
@@ -642,10 +684,18 @@ fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> 
 #[derive(Clone, Default)]
 pub struct FetchOpts {
     pub local_folder: String,
-    pub prefer_genius: bool,
+    pub provider: String,
     pub correct: bool,
     pub model: String,
     pub host: String,
+}
+
+fn provider_order(pref: &str) -> [&str; 3] {
+    match pref {
+        "musixmatch" => ["musixmatch", "lrclib", "genius"],
+        "genius" => ["genius", "lrclib", "musixmatch"],
+        _ => ["lrclib", "musixmatch", "genius"],
+    }
 }
 
 fn json_str(s: &str) -> String {
@@ -843,26 +893,19 @@ fn fetch_lyrics(
             }
         }
     }
-    let mut genius_done = false;
-    if opts.prefer_genius {
-        if let Some(lines) = fetch_genius(artist, title, duration) {
-            if !lines.is_empty() {
-                return maybe_correct(lines, artist, title, opts);
+    for name in provider_order(&opts.provider) {
+        let hit = match name {
+            "musixmatch" => crate::musixmatch::fetch_musixmatch(artist, title, duration),
+            "genius" => fetch_genius(artist, title, duration),
+            _ => {
+                let synced = fetch_synced(artist, title).unwrap_or_default();
+                if !synced.is_empty() {
+                    return synced;
+                }
+                fetch_search_synced(artist, title, duration)
             }
-        }
-        genius_done = true;
-    }
-    let synced = fetch_synced(artist, title).unwrap_or_default();
-    if !synced.is_empty() {
-        return synced;
-    }
-    if let Some(lines) = fetch_search_synced(artist, title, duration) {
-        if !lines.is_empty() {
-            return lines;
-        }
-    }
-    if !genius_done {
-        if let Some(lines) = fetch_genius(artist, title, duration) {
+        };
+        if let Some(lines) = hit {
             if !lines.is_empty() {
                 return maybe_correct(lines, artist, title, opts);
             }

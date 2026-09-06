@@ -10,6 +10,7 @@ mod dsp;
 mod fft;
 mod lyrics;
 mod mpris;
+mod musixmatch;
 mod pulse;
 mod render;
 mod settings;
@@ -581,7 +582,11 @@ fn main() {
                     lyric.set_follow(!lyric.following(), track.position);
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'p') || is_k(key, &cp[..clen], b'P') {
-                    cfg.provider = if cfg.provider == "genius" { "lrclib".to_string() } else { "genius".to_string() };
+                    cfg.provider = match cfg.provider.as_str() {
+                        "lrclib" => "musixmatch".to_string(),
+                        "musixmatch" => "genius".to_string(),
+                        _ => "lrclib".to_string(),
+                    };
                     lyric.poke();
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'+') || is_k(key, &cp[..clen], b'=') {
@@ -753,7 +758,7 @@ fn main() {
             &track,
             &FetchOpts {
                 local_folder: cfg.lyrics_folder.clone(),
-                prefer_genius: cfg.provider == "genius",
+                provider: cfg.provider.clone(),
                 correct: cfg.correction,
                 model: cfg.correction_model.clone(),
                 host: cfg.ollama_host.clone(),

@@ -88,11 +88,9 @@ pub fn any_active_player() -> bool {
 
 fn playing_player(allow: &[String]) -> Option<String> {
     let list = cmd_out("playerctl", &["-l"], 500)?;
-    for line in list.lines() {
-        let p = line.trim();
-        if p.is_empty() {
-            continue;
-        }
+    let mut names: Vec<&str> = list.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    names.sort_by_key(|p| if *p == "playerctld" { 0 } else { 1 });
+    for p in names {
         if !allow.is_empty() && !allow.iter().any(|a| p == a || p.starts_with(a)) {
             continue;
         }
