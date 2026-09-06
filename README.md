@@ -99,7 +99,9 @@ whitelists MPRIS players (first playing match wins, `playerctld`
 preferred); empty means any. `provider` defaults to `auto`, which
 queries lrclib exact, Musixmatch, lrclib search and Genius, then
 picks the best per track: word-level timing and full-track synced
-coverage win, generated even spreads and stub fragments lose. Set an
+coverage win, generated even spreads and stub fragments lose. A
+strong lrclib exact hit returns immediately without waiting on the
+slower sources. Set an
 explicit provider to pin first-hit-wins order instead. `p` cycles
 the provider (auto/lrclib/musixmatch/genius).
 
