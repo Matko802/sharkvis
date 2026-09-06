@@ -7,6 +7,7 @@ pub struct Track {
     pub title: String,
     pub position: f64,
     pub duration: f64,
+    pub url: String,
 }
 
 impl Track {
@@ -14,7 +15,13 @@ impl Track {
         if !self.present {
             return String::new();
         }
-        format!("{}|{}", self.artist.trim(), self.title.trim())
+        if !self.title.trim().is_empty() {
+            return format!("{}|{}", self.artist.trim(), self.title.trim());
+        }
+        if !self.url.trim().is_empty() {
+            return format!("url|{}", self.url.trim());
+        }
+        String::new()
     }
 }
 
@@ -78,11 +85,11 @@ pub fn poll_track() -> Track {
     };
     let meta = cmd_out(
         "playerctl",
-        &["-p", &player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}"],
+        &["-p", &player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}"],
         500,
     )
     .unwrap_or_default();
-    let mut parts = meta.splitn(3, '|');
+    let mut parts = meta.splitn(4, '|');
     t.artist = parts.next().unwrap_or("").trim().to_string();
     t.title = parts.next().unwrap_or("").trim().to_string();
     t.duration = parts
@@ -92,7 +99,8 @@ pub fn poll_track() -> Track {
         .parse::<f64>()
         .map(|us| us / 1_000_000.0)
         .unwrap_or(0.0);
-    if t.title.is_empty() {
+    t.url = parts.next().unwrap_or("").trim().to_string();
+    if t.title.is_empty() && t.url.is_empty() {
         return t;
     }
     t.position = cmd_out("playerctl", &["-p", &player, "position"], 500)

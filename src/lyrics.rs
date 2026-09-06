@@ -109,6 +109,96 @@ pub(crate) fn parse_lrc(text: &str) -> Vec<LyricLine> {
     out
 }
 
+fn parse_vtt_time(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let mut parts = s.split(':');
+    let mut secs = 0.0;
+    let mut chunks = Vec::new();
+    for p in parts.by_ref() {
+        chunks.push(p);
+    }
+    if chunks.len() < 2 || chunks.len() > 3 {
+        return None;
+    }
+    let mut mult = 1.0;
+    for c in chunks.iter().rev() {
+        let v: f64 = c.parse().ok()?;
+        secs += v * mult;
+        mult *= 60.0;
+    }
+    Some(secs)
+}
+
+fn strip_vtt_tags(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => tag = true,
+            '>' => {
+                tag = false;
+                o.push(' ');
+            }
+            _ if !tag => o.push(c),
+            _ => {}
+        }
+    }
+    o.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
+    let mut out = Vec::new();
+    let mut cur_start: Option<f64> = None;
+    let mut cur_text = String::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            if let Some(t) = cur_start.take() {
+                let clean = strip_vtt_tags(cur_text.trim());
+                if !clean.is_empty() {
+                    out.push(LyricLine { t, text: clean });
+                }
+            }
+            cur_text.clear();
+            continue;
+        }
+        if line == "WEBVTT" || line.starts_with("Kind:") || line.starts_with("Language:") {
+            continue;
+        }
+        if line.starts_with("NOTE") {
+            cur_start = None;
+            cur_text.clear();
+            continue;
+        }
+        if let Some(pos) = line.find("-->") {
+            if let Some(t) = cur_start.take() {
+                let clean = strip_vtt_tags(cur_text.trim());
+                if !clean.is_empty() {
+                    out.push(LyricLine { t, text: clean });
+                }
+            }
+            cur_text.clear();
+            let left = line[..pos].trim();
+            cur_start = parse_vtt_time(left);
+            continue;
+        }
+        if cur_start.is_some() {
+            if !cur_text.is_empty() {
+                cur_text.push(' ');
+            }
+            cur_text.push_str(line);
+        }
+    }
+    if let Some(t) = cur_start.take() {
+        let clean = strip_vtt_tags(cur_text.trim());
+        if !clean.is_empty() {
+            out.push(LyricLine { t, text: clean });
+        }
+    }
+    out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
 fn cache_path(key: &str) -> Option<String> {
     let home = std::env::var_os("HOME")?;
     let mut name: String = key
@@ -123,6 +213,60 @@ fn cache_path(key: &str) -> Option<String> {
         .collect();
     name.truncate(120);
     Some(format!("{}/.cache/sharkvis/lyrics/{}.lrc", home.to_string_lossy(), name))
+}
+
+fn fetch_subs(url: &str, cache_path: &str) -> Vec<LyricLine> {
+    if !url.contains("youtube.com/watch") && !url.contains("youtu.be/") {
+        return Vec::new();
+    }
+    let dir = match std::path::Path::new(cache_path).parent() {
+        Some(p) => p.to_string_lossy().into_owned(),
+        None => return Vec::new(),
+    };
+    let stem = format!("subs_{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0));
+    let out_tpl = format!("{}/{}.%(ext)s", dir, stem);
+    let _ = cmd_out(
+        "yt-dlp",
+        &[
+            "--skip-download", "--no-playlist", "--write-auto-subs", "--write-subs",
+            "--sub-langs", "en*", "--sub-format", "vtt/best", "-o", &out_tpl, url,
+        ],
+        90000,
+    );
+    let mut best = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&stem) && name.ends_with(".vtt") {
+                let p = format!("{}/{}", dir, name);
+                if let Ok(text) = std::fs::read_to_string(&p) {
+                    let lines = parse_vtt(&text);
+                    if lines.len() > best.len() {
+                        best = lines;
+                    }
+                }
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    best
+}
+
+fn fetch_lyrics(artist: &str, title: &str, url: &str, cache_path: &str) -> Vec<LyricLine> {
+    let synced = fetch_synced(artist, title).unwrap_or_default();
+    if !synced.is_empty() {
+        return synced;
+    }
+    if !url.is_empty() {
+        let subs = fetch_subs(url, cache_path);
+        if !subs.is_empty() {
+            return subs;
+        }
+    }
+    Vec::new()
 }
 
 fn fetch_synced(artist: &str, title: &str) -> Option<Vec<LyricLine>> {
@@ -199,10 +343,11 @@ impl LyricWorker {
                 self.fetching_for = key.clone();
                 let artist = track.artist.clone();
                 let title = track.title.clone();
+                let url = track.url.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.rx = Some(rx);
                 std::thread::spawn(move || {
-                    let lines = fetch_synced(&artist, &title).unwrap_or_default();
+                    let lines = fetch_lyrics(&artist, &title, &url, &path);
                     if !lines.is_empty() {
                         if let Some(parent) = std::path::Path::new(&path).parent() {
                             let _ = std::fs::create_dir_all(parent);
@@ -322,6 +467,7 @@ mod worker_tests {
             title: "b".to_string(),
             position: pos,
             duration: 30.0,
+            url: String::new(),
         }
     }
 
@@ -345,5 +491,27 @@ mod worker_tests {
         let mut no_track = track_at(0.0);
         no_track.present = false;
         assert_eq!(w.display(&no_track, "STATIC"), "STATIC");
+    }
+}
+
+#[cfg(test)]
+mod vtt_tests {
+    use super::{parse_vtt, parse_vtt_time};
+
+    #[test]
+    fn vtt_times_parse() {
+        assert!((parse_vtt_time("00:12.000").unwrap() - 12.0).abs() < 1e-6);
+        assert!((parse_vtt_time("01:02:03.500").unwrap() - 3723.5).abs() < 1e-6);
+        assert!(parse_vtt_time("bogus").is_none());
+    }
+
+    #[test]
+    fn vtt_cues_parse_and_strip() {
+        let vtt = "WEBVTT\n\n00:01.000 --> 00:03.000 align:start\n<c.colorE5E5E5>hello <00:01.500>world</c>\n\n00:04.000 --> 00:06.000\nsecond line\n";
+        let lines = parse_vtt(vtt);
+        assert_eq!(lines.len(), 2);
+        assert!((lines[0].t - 1.0).abs() < 1e-6);
+        assert_eq!(lines[0].text, "hello world");
+        assert_eq!(lines[1].text, "second line");
     }
 }
