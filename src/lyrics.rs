@@ -1302,36 +1302,10 @@ impl LyricWorker {
         };
         pos += self.offset_ms as f64 / 1000.0;
         let mut current: Option<String> = None;
-        for (i, line) in self.lines.iter().enumerate() {
-            if !line.words.is_empty() {
-                for w in &line.words {
-                    if w.t <= pos {
-                        current = Some(w.text.clone());
-                    }
-                }
-                continue;
+        for line in &self.lines {
+            if line.t <= pos && !line.text.trim().is_empty() {
+                current = Some(line.text.clone());
             }
-            let tokens: Vec<&str> = line.text.split_whitespace().collect();
-            if tokens.is_empty() {
-                continue;
-            }
-            let end = self.lines.get(i + 1).map(|l| l.t).unwrap_or(line.t + 8.0);
-            if pos < line.t {
-                continue;
-            }
-            let frac = if end > line.t {
-                ((pos - line.t) / (end - line.t)).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            let mut k = (frac * tokens.len() as f64).ceil() as usize;
-            if k < 1 {
-                k = 1;
-            }
-            if k > tokens.len() {
-                k = tokens.len();
-            }
-            current = Some(tokens[k - 1].to_string());
         }
         match current {
             Some(w) => vec![(w, true)],
@@ -1426,7 +1400,7 @@ mod worker_tests {
     }
 
     #[test]
-    fn shows_only_current_word() {
+    fn shows_whole_current_line() {
         let mut w = worker_with(vec![
             LyricLine { t: 10.0, text: "one two three four".to_string(), words: Vec::new() },
             LyricLine { t: 20.0, text: "next line".to_string(), words: Vec::new() },
@@ -1434,16 +1408,17 @@ mod worker_tests {
         w.update_pos(5.0);
         assert_eq!(w.display_lines(&track_at(5.0), "STATIC"), vec![(String::new(), true)]);
         w.update_pos(10.0);
-        assert_eq!(w.display_lines(&track_at(10.0), "STATIC"), vec![("one".to_string(), true)]);
-        w.update_pos(15.0);
-        assert_eq!(w.display_lines(&track_at(15.0), "STATIC"), vec![("two".to_string(), true)]);
-        w.update_pos(19.9);
         assert_eq!(
-            w.display_lines(&track_at(19.9), "STATIC"),
-            vec![("four".to_string(), true)]
+            w.display_lines(&track_at(10.0), "STATIC"),
+            vec![("one two three four".to_string(), true)]
+        );
+        w.update_pos(15.0);
+        assert_eq!(
+            w.display_lines(&track_at(15.0), "STATIC"),
+            vec![("one two three four".to_string(), true)]
         );
         w.update_pos(25.0);
-        assert_eq!(w.display_lines(&track_at(25.0), "STATIC"), vec![("line".to_string(), true)]);
+        assert_eq!(w.display_lines(&track_at(25.0), "STATIC"), vec![("next line".to_string(), true)]);
     }
 
     #[test]
@@ -1624,7 +1599,7 @@ mod port_tests {
     }
 
     #[test]
-    fn offset_shifts_words_and_follow_freezes() {
+    fn offset_shifts_lines_and_follow_freezes() {
         let mut w = super::LyricWorker::new();
         w.lines = vec![line(10.0, "one two three four"), line(20.0, "next line")];
         w.key = "a|b".to_string();
@@ -1638,13 +1613,13 @@ mod port_tests {
             duration: 30.0,
             url: String::new(),
         };
-        assert_eq!(w.display_lines(&track, "S"), vec![("two".to_string(), true)]);
-        w.offset_ms = 4000;
-        assert_eq!(w.display_lines(&track, "S"), vec![("four".to_string(), true)]);
+        assert_eq!(w.display_lines(&track, "S"), vec![("one two three four".to_string(), true)]);
+        w.offset_ms = 6000;
+        assert_eq!(w.display_lines(&track, "S"), vec![("next line".to_string(), true)]);
         w.offset_ms = 0;
         w.set_follow(false, 15.0);
         assert!(!w.following());
-        assert_eq!(w.display_lines(&track, "S"), vec![("two".to_string(), true)]);
+        assert_eq!(w.display_lines(&track, "S"), vec![("one two three four".to_string(), true)]);
         w.set_follow(true, 15.0);
         assert!(w.following());
     }
