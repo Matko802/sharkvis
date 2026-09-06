@@ -6,7 +6,6 @@ pub enum RenderMode {
     Wave,
     Oscilloscope,
     Text,
-    Ai,
 }
 
 pub struct Renderer {
@@ -327,8 +326,6 @@ impl Renderer {
             RenderMode::Oscilloscope
         } else if name == "text" {
             RenderMode::Text
-        } else if name == "ai" {
-            RenderMode::Ai
         } else {
             RenderMode::Bars
         }
@@ -1119,7 +1116,6 @@ impl Renderer {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
             RenderMode::Text => self.draw_text(values, None, self.x_off, region, &mut o),
-            RenderMode::Ai => self.draw_text(values, None, self.x_off, region, &mut o),
             RenderMode::Bars => {
                 self.draw_bars(values, None, self.num_bars, self.num_bars, self.x_off, region, &mut o)
             }
@@ -1144,7 +1140,6 @@ impl Renderer {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
             RenderMode::Text => self.draw_text(left, Some(right), self.x_off, region, &mut o),
-            RenderMode::Ai => self.draw_text(left, Some(right), self.x_off, region, &mut o),
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),

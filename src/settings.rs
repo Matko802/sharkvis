@@ -8,6 +8,7 @@ pub const CH_LAYOUT: u32 = 1 << 0;
 pub const CH_DSP: u32 = 1 << 1;
 pub const CH_AUDIO: u32 = 1 << 2;
 pub const CH_EDITOR: u32 = 1 << 3;
+pub const CH_ASK: u32 = 1 << 4;
 
 const S_BARS: usize = 0;
 const S_BARW: usize = 1;
@@ -29,7 +30,9 @@ const S_TEXT: usize = 16;
 const S_TEXTSRC: usize = 17;
 const S_AIMODEL: usize = 18;
 const S_SPEECH: usize = 19;
-const S_COUNT: usize = 20;
+const S_ASK: usize = 20;
+const S_WEB: usize = 21;
+const S_COUNT: usize = 22;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -54,10 +57,12 @@ const LABELS: [&str; S_COUNT] = [
     "text source",
     "ai model",
     "speech",
+    "ask",
+    "web",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
-const MODES: [&str; 5] = ["bars", "wave", "oscilloscope", "text", "ai"];
+const MODES: [&str; 4] = ["bars", "wave", "oscilloscope", "text"];
 
 fn now_ms() -> i64 {
     static REF: OnceLock<Instant> = OnceLock::new();
@@ -233,6 +238,9 @@ impl SettingsUi {
             S_SPEECH => {
                 cfg.speech = !cfg.speech;
             }
+            S_WEB => {
+                cfg.web = !cfg.web;
+            }
             _ => {}
         }
     }
@@ -255,9 +263,9 @@ impl SettingsUi {
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
             "text" => rows.extend_from_slice(&[
-                S_TEXT, S_TEXTSRC, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
+                S_TEXT, S_TEXTSRC, S_ASK, S_SPEECH, S_WEB, S_AIMODEL, S_SENS, S_AUTO, S_NOISE,
+                S_LOW, S_HIGH,
             ]),
-            "ai" => rows.extend_from_slice(&[S_AIMODEL, S_SPEECH]),
             _ => {}
         }
         rows.sort_unstable();
@@ -310,6 +318,8 @@ impl SettingsUi {
             KEY_ENTER => {
                 if self.sel == S_CHARSET || self.sel == S_TEXT || self.sel == S_AIMODEL {
                     *changed |= CH_EDITOR;
+                } else if self.sel == S_ASK {
+                    *changed |= CH_ASK;
                 }
             }
             KEY_CHAR => {
@@ -427,6 +437,14 @@ fn format_value(cfg: &Config, id: usize) -> String {
                 "off".to_string()
             }
         }
+        S_ASK => "press /".to_string(),
+        S_WEB => {
+            if cfg.web {
+                "on".to_string()
+            } else {
+                "off".to_string()
+            }
+        }
         _ => String::new(),
     }
 }
@@ -514,12 +532,13 @@ mod tests {
         assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXT));
         let spt = SettingsUi::visible_rows("text");
         assert!(spt.contains(&S_TEXT) && spt.contains(&S_TEXTSRC) && spt.contains(&S_SENS));
-        assert!(!spt.contains(&S_BARS) && !spt.contains(&S_CHARSET) && !spt.contains(&S_AIMODEL));
-        let ai = SettingsUi::visible_rows("ai");
-        assert!(ai.contains(&S_AIMODEL) && ai.contains(&S_SPEECH));
-        assert!(!ai.contains(&S_BARS) && !ai.contains(&S_TEXT) && !ai.contains(&S_SENS));
-        assert!(ai.contains(&S_MODE) && ai.contains(&S_FPS));
-        for m in ["bars", "wave", "oscilloscope", "text", "ai", "bogus"] {
+        assert!(spt.contains(&S_ASK) && spt.contains(&S_WEB) && spt.contains(&S_SPEECH));
+        assert!(spt.contains(&S_AIMODEL));
+        assert!(!spt.contains(&S_BARS) && !spt.contains(&S_CHARSET));
+        let unknown = SettingsUi::visible_rows("ai");
+        assert!(!unknown.contains(&S_BARS) && !unknown.contains(&S_TEXT));
+        assert!(unknown.contains(&S_MODE) && unknown.contains(&S_FPS));
+        for m in ["bars", "wave", "oscilloscope", "text", "bogus"] {
             let mut v = SettingsUi::visible_rows(m);
             let mut s = v.clone();
             s.sort_unstable();

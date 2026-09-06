@@ -43,6 +43,7 @@ pub struct Config {
     pub text_source: String,
     pub ai_model: String,
     pub speech: bool,
+    pub web: bool,
     pub ollama_host: String,
     pub glyphs: Vec<u8>,
 }
@@ -70,6 +71,7 @@ impl Default for Config {
             text_source: "static".to_string(),
             ai_model: "deepseek-r1:14b".to_string(),
             speech: true,
+            web: true,
             ollama_host: "http://localhost:11434".to_string(),
             glyphs: DEFAULT_GLYPHS.to_vec(),
         }
@@ -286,7 +288,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             b"visualizer" => match key.as_slice() {
                 b"mode" => {
                     let v = val.as_slice();
-                    if v == b"bars" || v == b"wave" || v == b"oscilloscope" || v == b"lissajous" || v == b"text" || v == b"ai" {
+                    if v == b"bars" || v == b"wave" || v == b"oscilloscope" || v == b"lissajous" || v == b"text" {
                         cfg.mode = String::from_utf8_lossy(v).into_owned();
                     }
                 }
@@ -310,6 +312,9 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                 }
                 b"speech" => {
                     cfg.speech = geti(&val, 1) != 0;
+                }
+                b"web" => {
+                    cfg.web = geti(&val, 1) != 0;
                 }
                 b"ollama_host" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
@@ -368,6 +373,7 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("text_source = {}\n", cfg.text_source));
     out.push_str(&format!("ai_model = {}\n", cfg.ai_model));
     out.push_str(&format!("speech = {}\n", if cfg.speech { 1 } else { 0 }));
+    out.push_str(&format!("web = {}\n", if cfg.web { 1 } else { 0 }));
     out.push_str(&format!("ollama_host = {}\n", cfg.ollama_host));
     out.push_str("glyphs = ");
     let _ = f.write_all(out.as_bytes());
