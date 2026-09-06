@@ -235,12 +235,16 @@ impl SettingsUi {
                 }
             }
             S_PROVIDER => {
-                let v = match cfg.provider.as_str() {
-                    "auto" => "lrclib".to_string(),
-                    "lrclib" => "musixmatch".to_string(),
-                    "musixmatch" => "genius".to_string(),
-                    _ => "auto".to_string(),
-                };
+                const ORDER: [&str; 4] = ["auto", "lrclib", "musixmatch", "genius"];
+                let mut idx = 0;
+                for (i, name) in ORDER.iter().enumerate() {
+                    if cfg.provider == *name {
+                        idx = i as i64;
+                        break;
+                    }
+                }
+                idx = (idx + dir + ORDER.len() as i64) % ORDER.len() as i64;
+                let v = ORDER[idx as usize].to_string();
                 if v != cfg.provider {
                     cfg.provider = v;
                     *changed |= CH_LAYOUT;
@@ -575,5 +579,24 @@ mod tests {
         ui.sel = S_MODE;
         ui.key(&mut cfg, KEY_DOWN, None, &mut 0);
         assert!(SettingsUi::nav_ids(&cfg).contains(&ui.sel));
+    }
+
+    #[test]
+    fn provider_cycle_respects_direction() {
+        let mut cfg = Config::default();
+        let mut changed = 0;
+        cfg.provider = "auto".to_string();
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
+        assert_eq!(cfg.provider, "lrclib");
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
+        assert_eq!(cfg.provider, "musixmatch");
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
+        assert_eq!(cfg.provider, "lrclib");
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
+        assert_eq!(cfg.provider, "auto");
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
+        assert_eq!(cfg.provider, "genius");
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
+        assert_eq!(cfg.provider, "auto");
     }
 }
