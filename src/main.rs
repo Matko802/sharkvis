@@ -422,6 +422,7 @@ fn main() {
     let mut lyric = LyricWorker::new();
     let mut track = Track::default();
     let mut last_track_poll = Instant::now();
+    let mut last_lyric_shown = String::new();
     let mut last_pos_poll = Instant::now();
 
     let mut next = Instant::now();
@@ -655,7 +656,14 @@ fn main() {
         lyric.update(&track, &cfg.lyrics_folder);
         if rnd.mode == RenderMode::Text {
             if cfg.text_source == "lyrics" {
-                rnd.set_rich(&lyric.display_lines(&track, &cfg.sptlrx_text));
+                let rows = lyric.display_lines(&track, &cfg.sptlrx_text);
+                let shown: String =
+                    rows.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
+                if shown != last_lyric_shown {
+                    last_lyric_shown = shown;
+                    force_draw = true;
+                }
+                rnd.set_rich(&rows);
             } else {
                 rnd.set_text(&cfg.sptlrx_text);
             }

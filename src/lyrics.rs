@@ -544,16 +544,21 @@ pub struct LyricWorker {
     rx: Option<std::sync::mpsc::Receiver<(String, Vec<LyricLine>)>>,
     last_attempt: Option<Instant>,
     last_pos: f64,
+    pos_prev: (f64, Instant),
+    pos_cur: (f64, Instant),
 }
 
 impl LyricWorker {
     pub fn new() -> Self {
+        let now = Instant::now();
         LyricWorker {
             key: String::new(),
             lines: Vec::new(),
             rx: None,
             last_attempt: None,
             last_pos: 0.0,
+            pos_prev: (0.0, now),
+            pos_cur: (0.0, now),
         }
     }
 
@@ -561,13 +566,38 @@ impl LyricWorker {
         self.update_meta(track, local_folder);
         if track.present {
             self.last_pos = track.position;
+            if self.pos_cur.0 == 0.0 && track.position > 0.0 {
+                self.update_pos(track.position);
+            }
         }
     }
 
     pub fn update_pos(&mut self, pos: f64) {
         if pos.is_finite() && pos >= 0.0 {
+            self.pos_prev = self.pos_cur;
+            self.pos_cur = (pos, Instant::now());
             self.last_pos = pos;
         }
+    }
+
+    fn extrapolate(p0: f64, t0: Instant, p1: f64, t1: Instant, now: Instant) -> f64 {
+        if p1 <= p0 || t1 <= t0 {
+            return p1;
+        }
+        let rate = (p1 - p0) / (t1 - t0).as_secs_f64();
+        if !(rate > 0.0) || !(rate < 4.0) {
+            return p1;
+        }
+        let dt = now.saturating_duration_since(t1).as_secs_f64();
+        if dt > 2.0 {
+            return p1;
+        }
+        p1 + rate * dt
+    }
+
+    fn live_position(&self) -> f64 {
+        let ((p0, t0), (p1, t1)) = (self.pos_prev, self.pos_cur);
+        Self::extrapolate(p0, t0, p1, t1, Instant::now())
     }
 
     fn update_meta(&mut self, track: &Track, local_folder: &str) {
@@ -647,11 +677,13 @@ impl LyricWorker {
     }
 
     fn live_pos(&self, track: &Track) -> f64 {
-        if track.present && track.key() == self.key {
-            track.position
-        } else {
-            self.last_pos
+        if self.lines.is_empty() {
+            if track.present && track.key() == self.key {
+                return track.position;
+            }
+            return self.last_pos;
         }
+        self.live_position()
     }
 
     fn current_idx(&self, pos: f64) -> Option<usize> {
@@ -734,12 +766,15 @@ mod worker_tests {
     use crate::mpris::Track;
 
     fn worker_with(lines: Vec<LyricLine>) -> LyricWorker {
+        let now = Instant::now();
         LyricWorker {
             key: "a|b".to_string(),
             lines,
             rx: None,
             last_attempt: None,
             last_pos: 0.0,
+            pos_prev: (0.0, now),
+            pos_cur: (0.0, now),
         }
     }
 
@@ -757,17 +792,22 @@ mod worker_tests {
 
     #[test]
     fn shows_only_current_word() {
-        let w = worker_with(vec![
+        let mut w = worker_with(vec![
             LyricLine { t: 10.0, text: "one two three four".to_string() },
             LyricLine { t: 20.0, text: "next line".to_string() },
         ]);
+        w.update_pos(5.0);
         assert_eq!(w.display_lines(&track_at(5.0), "STATIC"), vec![(String::new(), true)]);
+        w.update_pos(10.0);
         assert_eq!(w.display_lines(&track_at(10.0), "STATIC"), vec![("one".to_string(), true)]);
+        w.update_pos(15.0);
         assert_eq!(w.display_lines(&track_at(15.0), "STATIC"), vec![("two".to_string(), true)]);
+        w.update_pos(19.9);
         assert_eq!(
             w.display_lines(&track_at(19.9), "STATIC"),
             vec![("four".to_string(), true)]
         );
+        w.update_pos(25.0);
         assert_eq!(w.display_lines(&track_at(25.0), "STATIC"), vec![("line".to_string(), true)]);
     }
 
@@ -877,5 +917,32 @@ mod plain_tests {
         assert!((lines[2].t - 60.0).abs() < 1e-6);
         assert!(distribute_plain(vec!["only".to_string()], 90.0).is_none());
         assert!(distribute_plain(vec!["a".to_string(), "b".to_string()], 10.0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod interp_tests {
+    use super::LyricWorker;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn extrapolates_playback() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(200);
+        let now = t1 + Duration::from_millis(300);
+        let v = LyricWorker::extrapolate(10.0, t0, 10.2, t1, now);
+        assert!((v - 10.5).abs() < 1e-6, "got {}", v);
+    }
+
+    #[test]
+    fn holds_on_pause_seek_or_stall() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(200);
+        let now = t1 + Duration::from_millis(100);
+        assert_eq!(LyricWorker::extrapolate(10.0, t0, 10.0, t1, now), 10.0);
+        assert_eq!(LyricWorker::extrapolate(12.0, t0, 10.0, t1, now), 10.0);
+        assert_eq!(LyricWorker::extrapolate(10.0, t0, 30.0, t1, now), 30.0);
+        let late = t1 + Duration::from_millis(5000);
+        assert_eq!(LyricWorker::extrapolate(10.0, t0, 10.2, t1, late), 10.2);
     }
 }
