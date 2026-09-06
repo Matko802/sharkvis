@@ -60,9 +60,6 @@ pub struct Renderer {
     pub text_left: bool,
     pub text_size: usize,
     pub text_small: bool,
-    text_pk_l: Vec<f64>,
-    text_pk_r: Vec<f64>,
-    text_gpk: f64,
 }
 
 #[derive(Default)]
@@ -292,9 +289,6 @@ impl Renderer {
             text_left: false,
             text_size: 1,
             text_small: false,
-            text_pk_l: Vec::new(),
-            text_pk_r: Vec::new(),
-            text_gpk: 0.0,
         };
         r.set_glyphs(None);
         r
@@ -833,33 +827,6 @@ impl Renderer {
         (mags_l, mags_r)
     }
 
-    fn agc_text(&mut self, l: &mut [f64], r: &mut [f64]) {
-        const DECAY: f64 = 0.94;
-        const FLOOR: f64 = 0.02;
-        let m = l.len();
-        if self.text_pk_l.len() != m || self.text_pk_r.len() != m {
-            self.text_pk_l = vec![0.0; m];
-            self.text_pk_r = vec![0.0; m];
-        }
-        let mut frame = 0.0f64;
-        for i in 0..m {
-            frame = frame.max(l[i]).max(r[i]);
-            let pl = &mut self.text_pk_l[i];
-            *pl = l[i].max(*pl * DECAY);
-            l[i] = if *pl < FLOOR { 0.0 } else { (l[i] / *pl).min(1.0) };
-            let pr = &mut self.text_pk_r[i];
-            *pr = r[i].max(*pr * DECAY);
-            r[i] = if *pr < FLOOR { 0.0 } else { (r[i] / *pr).min(1.0) };
-        }
-        self.text_gpk = frame.max(self.text_gpk * DECAY);
-        let gate = (self.text_gpk * 2.0).clamp(0.0, 1.0);
-        if gate < 1.0 {
-            for v in l.iter_mut().chain(r.iter_mut()) {
-                *v *= gate;
-            }
-        }
-    }
-
     fn draw_text_mode(
         &mut self,
         values: &[f64],
@@ -893,9 +860,13 @@ impl Renderer {
             return;
         }
         let m = text.len();
-        let (mut mags_l, mut mags_r) = Self::char_raw_mags(values, right, m);
-        self.agc_text(&mut mags_l, &mut mags_r);
-        let v = (self.text_gpk * 2.0).clamp(0.0, 1.0);
+        let (mags_l, mags_r) = Self::char_raw_mags(values, right, m);
+        let mut v = mags_l.iter().chain(mags_r.iter()).cloned().fold(0.0f64, f64::max);
+        if !(v > 0.0) {
+            v = 0.0;
+        } else if v > 1.0 {
+            v = 1.0;
+        }
         let marker = 64 + (v * 15.0 + 0.5) as u8;
         let esc = self.letter_color(0.5, v);
         let mut paras: Vec<&[char]> = Vec::new();
@@ -1028,8 +999,7 @@ impl Renderer {
         if m == 0 {
             return;
         }
-        let (mut mags_l, mut mags_r) = Self::char_raw_mags(values, right, m);
-        self.agc_text(&mut mags_l, &mut mags_r);
+        let (mags_l, mags_r) = Self::char_raw_mags(values, right, m);
         let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size);
         if lines.is_empty() {
             return;
@@ -1699,30 +1669,17 @@ mod tests {
     }
 
     #[test]
-    fn text_agc_lifts_quiet_tail() {
+    fn text_brightness_follows_bins_directly() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
-        let n = 64;
-        let vals: Vec<f64> = (0..n).map(|i| 0.9 - 0.85 * i as f64 / n as f64).collect();
-        let (mut a, mut b) = (Vec::new(), Vec::new());
-        for _ in 0..5 {
-            let (mut ra, mut rb) = Renderer::char_raw_mags(&vals, Some(&vals), 8);
-            r.agc_text(&mut ra, &mut rb);
-            a = ra;
-            b = rb;
-        }
-        assert!((a[0] - 1.0).abs() < 1e-6, "loud head stays full, got {}", a[0]);
-        assert!(a[7] > 0.5, "quiet tail must normalize up, got {}", a[7]);
-        assert!(b[7] > 0.5, "quiet tail must normalize up, got {}", b[7]);
-    }
-
-    #[test]
-    fn text_agc_keeps_silence_dark() {
-        let mut r = Renderer::new(24, 80, 2, 1, 8);
-        let vals = vec![0.0; 64];
-        let (mut a, mut b) = Renderer::char_raw_mags(&vals, Some(&vals), 8);
-        r.agc_text(&mut a, &mut b);
-        assert!(a.iter().all(|&v| v == 0.0));
-        assert!(b.iter().all(|&v| v == 0.0));
+        r.set_text("AB");
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        let vals = vec![1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let mut out = Vec::new();
+        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "loud bins must be bright, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet bins must stay dim like bars");
     }
 
     #[test]

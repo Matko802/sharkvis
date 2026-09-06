@@ -55,9 +55,9 @@ are saved automatically when you close the panel or quit.
 
 `bars`, `wave`, `oscilloscope`, `text` (switch in the panel with `g`).
 `text` renders the current lyric line (or the static `text`) in big
-block letters, each letter lit by its own frequency bin with
-auto-gain so quiet treble at the end of the line reacts as hard as
-bass at the start. `text_size` 1-5 scales the letters (`0` = auto),
+block letters, each letter lit by its own frequency bin exactly like
+the bars: bin value drives letter brightness the way it drives bar
+height, no auto-gain. `text_size` 1-5 scales the letters (`0` = auto),
 `text_style = small` renders the same line as plain small terminal
 text instead, pulsing with the overall level. The left side follows
 the left channel and the right side the right channel.
