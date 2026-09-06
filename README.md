@@ -94,11 +94,16 @@ lyrics spread over the track), then YouTube auto-captions via `yt-dlp`
 (from the player URL, else a duration-guarded search).
 Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
 whitelists MPRIS players (first playing match wins, `playerctld`
-preferred); empty means any. `p` cycles the preferred provider.
+preferred); empty means any. `provider` defaults to `auto`, which
+queries lrclib exact, Musixmatch, lrclib search and Genius, then
+picks the best per track: word-level timing and full-track synced
+coverage win, generated even spreads and stub fragments lose. Set an
+explicit provider to pin first-hit-wins order instead. `p` cycles
+the provider (auto/lrclib/musixmatch/genius).
 
 Text-mode keys (lyrics showing): `s` manual search (`Artist - Title`),
 `l` cycle media player, `r` force lyric reload, `c` left/center align,
-`a` follow on/off, `p` switch provider (lrclib/genius), `+`/`-` nudge
+`a` follow on/off, `p` switch provider, `+`/`-` nudge
 sync ±500ms, `0` reset sync.
 
 ## Update

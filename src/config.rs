@@ -75,7 +75,7 @@ impl Default for Config {
             text_align: "center".to_string(),
             text_size: 1,
             text_style: "big".to_string(),
-            provider: "lrclib".to_string(),
+            provider: "auto".to_string(),
             lyric_offset_ms: 0,
             lyrics_folder: String::new(),
             mpris_players: String::new(),
@@ -340,7 +340,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                 }
                 b"provider" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
-                    if v == "genius" || v == "musixmatch" || v == "lrclib" {
+                    if v == "auto" || v == "genius" || v == "musixmatch" || v == "lrclib" {
                         cfg.provider = v;
                     }
                 }

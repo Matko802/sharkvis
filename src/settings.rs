@@ -236,9 +236,10 @@ impl SettingsUi {
             }
             S_PROVIDER => {
                 let v = match cfg.provider.as_str() {
+                    "auto" => "lrclib".to_string(),
                     "lrclib" => "musixmatch".to_string(),
                     "musixmatch" => "genius".to_string(),
-                    _ => "lrclib".to_string(),
+                    _ => "auto".to_string(),
                 };
                 if v != cfg.provider {
                     cfg.provider = v;

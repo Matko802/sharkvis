@@ -583,9 +583,10 @@ fn main() {
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'p') || is_k(key, &cp[..clen], b'P') {
                     cfg.provider = match cfg.provider.as_str() {
+                        "auto" => "lrclib".to_string(),
                         "lrclib" => "musixmatch".to_string(),
                         "musixmatch" => "genius".to_string(),
-                        _ => "lrclib".to_string(),
+                        _ => "auto".to_string(),
                     };
                     lyric.poke();
                     force_draw = true;

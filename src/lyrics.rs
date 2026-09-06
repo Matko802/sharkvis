@@ -695,6 +695,68 @@ fn provider_order(pref: &str) -> [&str; 3] {
     }
 }
 
+fn quality_bonus(lines: &[LyricLine], duration: f64) -> i64 {
+    if lines.is_empty() {
+        return -10000;
+    }
+    let mut s = lines.len().min(60) as i64;
+    if lines.iter().any(|l| !l.words.is_empty()) {
+        s += 40;
+    }
+    if duration >= 30.0 {
+        let last = lines.iter().map(|l| l.t).fold(0.0f64, f64::max);
+        let cov = last / duration;
+        if cov >= 0.5 && cov <= 1.1 {
+            s += 20;
+        } else if cov < 0.2 {
+            s -= 30;
+        }
+    }
+    if lines.len() >= 4 {
+        let mut mean = 0.0;
+        for w in lines.windows(2) {
+            mean += (w[1].t - w[0].t).max(0.0);
+        }
+        mean /= (lines.len() - 1) as f64;
+        if mean > 0.0 {
+            let mut var = 0.0;
+            for w in lines.windows(2) {
+                let g = (w[1].t - w[0].t).max(0.0);
+                var += (g - mean) * (g - mean);
+            }
+            var /= (lines.len() - 1) as f64;
+            if var.sqrt() / mean < 0.03 {
+                s -= 25;
+            }
+        }
+    }
+    s
+}
+
+fn fetch_auto(artist: &str, title: &str, duration: f64) -> Vec<LyricLine> {
+    let mut best: Vec<LyricLine> = Vec::new();
+    let mut best_score = -10000i64;
+    let cands: Vec<(i64, Option<Vec<LyricLine>>)> = vec![
+        (100, fetch_synced(artist, title)),
+        (90, crate::musixmatch::fetch_musixmatch(artist, title, duration)),
+        (60, fetch_search_synced(artist, title, duration)),
+        (30, fetch_genius(artist, title, duration)),
+    ];
+    for (base, hit) in cands {
+        if let Some(lines) = hit {
+            if lines.is_empty() {
+                continue;
+            }
+            let s = base + quality_bonus(&lines, duration);
+            if s > best_score {
+                best_score = s;
+                best = lines;
+            }
+        }
+    }
+    best
+}
+
 fn fetch_lyrics(
     artist: &str,
     title: &str,
@@ -710,21 +772,28 @@ fn fetch_lyrics(
             }
         }
     }
-    for name in provider_order(&opts.provider) {
-        let hit = match name {
-            "musixmatch" => crate::musixmatch::fetch_musixmatch(artist, title, duration),
-            "genius" => fetch_genius(artist, title, duration),
-            _ => {
-                let synced = fetch_synced(artist, title).unwrap_or_default();
-                if !synced.is_empty() {
-                    return synced;
+    if opts.provider == "auto" {
+        let lines = fetch_auto(artist, title, duration);
+        if !lines.is_empty() {
+            return lines;
+        }
+    } else {
+        for name in provider_order(&opts.provider) {
+            let hit = match name {
+                "musixmatch" => crate::musixmatch::fetch_musixmatch(artist, title, duration),
+                "genius" => fetch_genius(artist, title, duration),
+                _ => {
+                    let synced = fetch_synced(artist, title).unwrap_or_default();
+                    if !synced.is_empty() {
+                        return synced;
+                    }
+                    fetch_search_synced(artist, title, duration)
                 }
-                fetch_search_synced(artist, title, duration)
-            }
-        };
-        if let Some(lines) = hit {
-            if !lines.is_empty() {
-                return lines;
+            };
+            if let Some(lines) = hit {
+                if !lines.is_empty() {
+                    return lines;
+                }
             }
         }
     }
@@ -1178,6 +1247,28 @@ mod tests {
             Some("[00:01.00]hi\nthere \"yo\"".to_string())
         );
         assert_eq!(json_string(body, "missing"), None);
+    }
+
+    #[test]
+    fn quality_prefers_words_coverage_and_penalizes_spread() {
+        let plain = |t: f64| LyricLine { t, text: "la".to_string(), words: Vec::new() };
+        let real: Vec<LyricLine> =
+            vec![3.0, 9.5, 14.0, 22.5, 31.0, 40.5, 52.0, 63.5, 75.0, 88.0, 101.5, 118.0]
+                .into_iter()
+                .map(plain)
+                .collect();
+        let spread: Vec<LyricLine> = (0..12).map(|i| plain(i as f64 * 10.0 + 3.0)).collect();
+        assert!(quality_bonus(&real, 200.0) > quality_bonus(&spread, 200.0));
+        let mut wordy = real.clone();
+        wordy[0].words = vec![LyricWord { t: 3.0, text: "la".to_string() }];
+        assert_eq!(quality_bonus(&wordy, 200.0) - quality_bonus(&real, 200.0), 40);
+        let stub: Vec<LyricLine> =
+            vec![1.0, 5.0, 9.0, 13.0, 17.0].into_iter().map(plain).collect();
+        assert!(quality_bonus(&stub, 200.0) < 0);
+        assert!(quality_bonus(&[], 200.0) < quality_bonus(&stub, 200.0));
+        let many: Vec<LyricLine> = (0..100).map(|i| plain(i as f64 * 1.7)).collect();
+        let sixty: Vec<LyricLine> = (0..60).map(|i| plain(i as f64 * 1.7)).collect();
+        assert_eq!(quality_bonus(&many, 0.0), quality_bonus(&sixty, 0.0));
     }
 }
 
