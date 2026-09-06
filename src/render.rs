@@ -717,29 +717,23 @@ impl Renderer {
                 region_w.saturating_sub(wline) / 2
             };
             let y0 = top + li * 8 * s;
+            let mid_x = x_start + lead + wline / 2;
             for (k, &ci) in line.iter().enumerate() {
                 let dim_f = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
-                let mut vl = mags_l[ci] * dim_f;
-                if !(vl > 0.0) {
-                    vl = 0.0;
-                } else if vl > 1.0 {
-                    vl = 1.0;
-                }
-                let mut vr = mags_r[ci] * dim_f;
-                if !(vr > 0.0) {
-                    vr = 0.0;
-                } else if vr > 1.0 {
-                    vr = 1.0;
-                }
-                let mark_l = 64 + (vl * 15.0 + 0.5) as u8;
-                let mark_r = 64 + (vr * 15.0 + 0.5) as u8;
-                let glyph = Self::block_glyph(text[ci].to_ascii_uppercase());
                 let x0 = x_start + lead + k * 6 * s;
-                let xfrac = (ci as f64 + 0.5) / m as f64;
-                let esc_l = self.letter_color(xfrac, vl);
-                let esc_r = self.letter_color(xfrac, vr);
                 let box_w = if k + 1 < line.len() { 6 * s } else { 5 * s };
-                let half = (5 * s + 1) / 2;
+                let left_side = x0 + box_w / 2 <= mid_x;
+                let raw = if left_side { mags_l[ci] } else { mags_r[ci] };
+                let mut v = raw * dim_f;
+                if !(v > 0.0) {
+                    v = 0.0;
+                } else if v > 1.0 {
+                    v = 1.0;
+                }
+                let marker = 64 + (v * 15.0 + 0.5) as u8;
+                let glyph = Self::block_glyph(text[ci].to_ascii_uppercase());
+                let xfrac = (ci as f64 + 0.5) / m as f64;
+                let esc = self.letter_color(xfrac, v);
                 boxes.push((x0, y0, box_w));
                 let mut changed = false;
                 for gr in 0..7 {
@@ -754,11 +748,7 @@ impl Renderer {
                                 break;
                             }
                             let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
-                            let want = if on {
-                                if px < half { mark_l } else { mark_r }
-                            } else {
-                                0
-                            };
+                            let want = if on { marker } else { 0 };
                             if self.prev[y * cols + x] != want {
                                 changed = true;
                             }
@@ -775,22 +765,14 @@ impl Renderer {
                             break;
                         }
                         seek_cell(y as u32, x0 as u32, out);
-                        out.s(&esc_l);
+                        out.s(&esc);
                         for px in 0..box_w {
                             let x = x0 + px;
                             if x >= x_end {
                                 break;
                             }
-                            if px == half {
-                                seek_cell(y as u32, x as u32, out);
-                                out.s(&esc_r);
-                            }
                             let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
-                            let want = if on {
-                                if px < half { mark_l } else { mark_r }
-                            } else {
-                                0
-                            };
+                            let want = if on { marker } else { 0 };
                             let idx = y * cols + x;
                             self.prev[idx] = want;
                             if on {
@@ -1348,9 +1330,9 @@ mod tests {
     }
 
     #[test]
-    fn text_splits_stereo_halves() {
+    fn text_stereo_sides() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
-        r.set_text("A");
+        r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
         let left = vec![1.0; 8];
@@ -1358,8 +1340,8 @@ mod tests {
         let mut out = Vec::new();
         r.draw_text(&left, Some(&right), 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;128;128;128m"), "loud left half must be bright, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;13;13;13m"), "quiet right half must be dim");
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "loud left side must be bright, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet right side must be dim");
     }
 
         #[test]
@@ -1444,5 +1426,24 @@ mod layout_tests {
         assert_eq!(Renderer::layout_text(&[], 80, 24, 0, 0).1.len(), 0);
         assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1, 0).1.len(), 0);
         assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1, 0).1.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    #[test]
+    fn probe_stereo_ramps() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("AB");
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        let left: Vec<f64> = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+        let right: Vec<f64> = vec![0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1];
+        let mut out = Vec::new();
+        r.draw_text(&left, Some(&right), 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        println!("RAMPS-OUT: {:?}", text);
     }
 }

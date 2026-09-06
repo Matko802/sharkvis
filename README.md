@@ -56,7 +56,8 @@ are saved automatically when you close the panel or quit.
 `bars`, `wave`, `oscilloscope`, `text` (switch in the panel with `g`).
 `text` renders a big block-letter word, each letter lit by its own
 frequency bin. With `text_source = lyrics` it shows the currently sung
-word, one at a time, each half following its stereo channel.
+word, one at a time, the left side following the left channel and the
+right side following the right channel.
 
 ```ini
 [visualizer]
