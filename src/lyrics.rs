@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::mpris::{cmd_out, Track};
 
@@ -290,7 +290,8 @@ pub struct LyricWorker {
     key: String,
     lines: Vec<LyricLine>,
     rx: Option<std::sync::mpsc::Receiver<(String, Vec<LyricLine>)>>,
-    fetching_for: String,
+    last_attempt: Option<Instant>,
+    last_pos: f64,
 }
 
 impl LyricWorker {
@@ -299,75 +300,72 @@ impl LyricWorker {
             key: String::new(),
             lines: Vec::new(),
             rx: None,
-            fetching_for: String::new(),
+            last_attempt: None,
+            last_pos: 0.0,
         }
     }
 
     pub fn update(&mut self, track: &Track) {
-        while let Some(Ok((k, lines))) = self.rx.as_ref().map(|r| r.try_recv()) {
+        if let Some((k, lines)) = self.rx.as_ref().and_then(|r| r.try_recv().ok()) {
             self.rx = None;
-            self.fetching_for = String::new();
             if k == self.key {
                 self.lines = lines;
             }
         }
         let key = track.key();
-        if key == self.key {
-            return;
-        }
-        self.key = key.clone();
-        self.lines.clear();
-        self.rx = None;
-        self.fetching_for = String::new();
         if key.is_empty() {
             return;
         }
-        if let Some(path) = cache_path(&key) {
-            if let Ok(meta) = std::fs::metadata(&path) {
-                let fresh_empty = meta.len() == 0
-                    && meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.elapsed().ok())
-                        .is_some_and(|age| age < Duration::from_secs(7 * 86400));
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    if !text.is_empty() {
-                        self.lines = parse_lrc(&text);
-                        return;
-                    } else if fresh_empty {
-                        return;
-                    }
-                }
-            }
-            if self.fetching_for != key {
-                self.fetching_for = key.clone();
-                let artist = track.artist.clone();
-                let title = track.title.clone();
-                let url = track.url.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                self.rx = Some(rx);
-                std::thread::spawn(move || {
-                    let lines = fetch_lyrics(&artist, &title, &url, &path);
-                    if !lines.is_empty() {
-                        if let Some(parent) = std::path::Path::new(&path).parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let raw: String = lines
-                            .iter()
-                            .map(|l| format!("[{:02}:{:05.2}]{}", l.t as u32 / 60, l.t % 60.0, l.text))
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let _ = std::fs::write(&path, raw);
-                    } else if std::fs::metadata(&path).is_err() {
-                        if let Some(parent) = std::path::Path::new(&path).parent() {
-                            let _ = std::fs::create_dir_all(parent);
-                        }
-                        let _ = std::fs::write(&path, "");
-                    }
-                    let _ = tx.send((key, lines));
-                });
+        self.last_pos = track.position;
+        if key != self.key {
+            self.key = key.clone();
+            self.lines.clear();
+            self.rx = None;
+            self.last_attempt = None;
+        }
+        if !self.lines.is_empty() || self.rx.is_some() {
+            return;
+        }
+        if let Some(t) = self.last_attempt {
+            if t.elapsed() < Duration::from_secs(60) {
+                return;
             }
         }
+        let Some(path) = cache_path(&key) else {
+            return;
+        };
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if !text.trim().is_empty() {
+                let lines = parse_lrc(&text);
+                if !lines.is_empty() {
+                    self.lines = lines;
+                    return;
+                }
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        self.last_attempt = Some(Instant::now());
+        let artist = track.artist.clone();
+        let title = track.title.clone();
+        let url = track.url.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.rx = Some(rx);
+        std::thread::spawn(move || {
+            let lines = fetch_lyrics(&artist, &title, &url, &path);
+            if !lines.is_empty() {
+                if let Some(parent) = std::path::Path::new(&path).parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let raw: String = lines
+                    .iter()
+                    .map(|l| format!("[{:02}:{:05.2}]{}", l.t as u32 / 60, l.t % 60.0, l.text))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = std::fs::write(&path, raw);
+            }
+            let _ = tx.send((key, lines));
+        });
     }
 
     pub fn display(&self, track: &Track, static_text: &str) -> String {
@@ -382,7 +380,11 @@ impl LyricWorker {
             }
             return static_text.to_string();
         }
-        let pos = track.position;
+        let pos = if track.present && track.key() == self.key {
+            track.position
+        } else {
+            self.last_pos
+        };
         let mut idx = None;
         for (i, l) in self.lines.iter().enumerate() {
             if l.t <= pos {
@@ -456,7 +458,8 @@ mod worker_tests {
             key: "a|b".to_string(),
             lines,
             rx: None,
-            fetching_for: String::new(),
+            last_attempt: None,
+            last_pos: 0.0,
         }
     }
 
