@@ -558,6 +558,19 @@ impl LyricWorker {
     }
 
     pub fn update(&mut self, track: &Track, local_folder: &str) {
+        self.update_meta(track, local_folder);
+        if track.present {
+            self.last_pos = track.position;
+        }
+    }
+
+    pub fn update_pos(&mut self, pos: f64) {
+        if pos.is_finite() && pos >= 0.0 {
+            self.last_pos = pos;
+        }
+    }
+
+    fn update_meta(&mut self, track: &Track, local_folder: &str) {
         if let Some((k, lines)) = self.rx.as_ref().and_then(|r| r.try_recv().ok()) {
             self.rx = None;
             if k == self.key {
@@ -568,7 +581,6 @@ impl LyricWorker {
         if key.is_empty() {
             return;
         }
-        self.last_pos = track.position;
         if key != self.key {
             self.key = key.clone();
             self.lines.clear();
@@ -654,12 +666,12 @@ impl LyricWorker {
         idx
     }
 
-    fn revealed(&self, i: usize, pos: f64) -> String {
+    fn revealed_count(&self, i: usize, pos: f64) -> usize {
         let start = self.lines[i].t;
         let end = self.lines.get(i + 1).map(|l| l.t).unwrap_or(start + 8.0);
         let words: Vec<&str> = self.lines[i].text.split_whitespace().collect();
         if words.is_empty() {
-            return String::new();
+            return 0;
         }
         let frac = if end > start {
             ((pos - start) / (end - start)).clamp(0.0, 1.0)
@@ -670,10 +682,7 @@ impl LyricWorker {
         if k < 1 {
             k = 1;
         }
-        if k > words.len() {
-            k = words.len();
-        }
-        words[..k].join(" ")
+        k.min(words.len())
     }
 
     pub fn display_lines(&self, track: &Track, static_text: &str) -> Vec<(String, bool)> {
@@ -684,15 +693,12 @@ impl LyricWorker {
         let Some(i) = self.current_idx(pos) else {
             return vec![(String::new(), true)];
         };
-        let mut out = Vec::new();
-        if i > 0 {
-            out.push((self.lines[i - 1].text.clone(), false));
+        let words: Vec<&str> = self.lines[i].text.split_whitespace().collect();
+        if words.is_empty() {
+            return vec![(String::new(), true)];
         }
-        out.push((self.revealed(i, pos), true));
-        for j in i + 1..(i + 3).min(self.lines.len()) {
-            out.push((self.lines[j].text.clone(), false));
-        }
-        out
+        let k = self.revealed_count(i, pos).min(words.len()).max(1) - 1;
+        vec![(words[k].to_string(), true)]
     }
 }
 
@@ -740,6 +746,7 @@ mod worker_tests {
     fn track_at(pos: f64) -> Track {
         Track {
             present: true,
+            player: String::new(),
             artist: "a".to_string(),
             title: "b".to_string(),
             position: pos,
@@ -749,24 +756,19 @@ mod worker_tests {
     }
 
     #[test]
-    fn picks_line_and_reveals_words() {
+    fn shows_only_current_word() {
         let w = worker_with(vec![
             LyricLine { t: 10.0, text: "one two three four".to_string() },
             LyricLine { t: 20.0, text: "next line".to_string() },
         ]);
         assert_eq!(w.display_lines(&track_at(5.0), "STATIC"), vec![(String::new(), true)]);
-        let rows = w.display_lines(&track_at(10.0), "STATIC");
-        assert_eq!(rows[0], ("one".to_string(), true));
-        let rows = w.display_lines(&track_at(15.0), "STATIC");
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], ("one two".to_string(), true));
-        assert_eq!(rows[1], ("next line".to_string(), false));
-        let rows = w.display_lines(&track_at(19.9), "STATIC");
-        assert_eq!(rows[0], ("one two three four".to_string(), true));
-        let rows = w.display_lines(&track_at(25.0), "STATIC");
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], ("one two three four".to_string(), false));
-        assert_eq!(rows[1], ("next line".to_string(), true));
+        assert_eq!(w.display_lines(&track_at(10.0), "STATIC"), vec![("one".to_string(), true)]);
+        assert_eq!(w.display_lines(&track_at(15.0), "STATIC"), vec![("two".to_string(), true)]);
+        assert_eq!(
+            w.display_lines(&track_at(19.9), "STATIC"),
+            vec![("four".to_string(), true)]
+        );
+        assert_eq!(w.display_lines(&track_at(25.0), "STATIC"), vec![("line".to_string(), true)]);
     }
 
     #[test]

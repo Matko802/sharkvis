@@ -20,7 +20,7 @@ use crate::audio::Audio;
 use crate::config::{color_to_rgb, config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
 use crate::lyrics::LyricWorker;
-use crate::mpris::{poll_track, Track};
+use crate::mpris::{poll_position, poll_track, Track};
 use crate::render::{RenderMode, Renderer};
 use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
@@ -422,6 +422,7 @@ fn main() {
     let mut lyric = LyricWorker::new();
     let mut track = Track::default();
     let mut last_track_poll = Instant::now();
+    let mut last_pos_poll = Instant::now();
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
@@ -627,7 +628,7 @@ fn main() {
             live.update(energy, bass, left, right, cv(lo), cv(hi));
         }
 
-        if last_track_poll.elapsed() >= Duration::from_millis(500) {
+        if last_track_poll.elapsed() >= Duration::from_millis(2000) {
             last_track_poll = Instant::now();
             let allow: Vec<String> = cfg
                 .mpris_players
@@ -635,7 +636,21 @@ fn main() {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            track = poll_track(&allow);
+            let fresh = poll_track(&allow);
+            if fresh.present {
+                track = fresh;
+            } else {
+                track.present = false;
+            }
+        }
+        if last_pos_poll.elapsed() >= Duration::from_millis(200) {
+            last_pos_poll = Instant::now();
+            if track.present && !track.player.is_empty() {
+                if let Some(pos) = poll_position(&track.player) {
+                    track.position = pos;
+                    lyric.update_pos(pos);
+                }
+            }
         }
         lyric.update(&track, &cfg.lyrics_folder);
         if rnd.mode == RenderMode::Text {

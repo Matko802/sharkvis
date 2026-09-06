@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Default)]
 pub struct Track {
     pub present: bool,
+    pub player: String,
     pub artist: String,
     pub title: String,
     pub position: f64,
@@ -86,6 +87,7 @@ pub fn poll_track(allow: &[String]) -> Track {
     let Some(player) = playing_player(allow) else {
         return t;
     };
+    t.player = player.clone();
     let meta = cmd_out(
         "playerctl",
         &["-p", &player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}"],
@@ -106,9 +108,15 @@ pub fn poll_track(allow: &[String]) -> Track {
     if t.title.is_empty() && t.url.is_empty() {
         return t;
     }
-    t.position = cmd_out("playerctl", &["-p", &player, "position"], 500)
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0);
+    t.position = poll_position(&t.player).unwrap_or(0.0);
     t.present = true;
     t
+}
+
+pub fn poll_position(player: &str) -> Option<f64> {
+    if player.is_empty() {
+        return None;
+    }
+    cmd_out("playerctl", &["-p", player, "position"], 300)
+        .and_then(|s| s.parse::<f64>().ok())
 }
