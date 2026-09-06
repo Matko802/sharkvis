@@ -510,6 +510,90 @@ impl Renderer {
         o
     }
 
+    fn wrap_chars(chars: &[char], cap: usize) -> Vec<Vec<usize>> {
+        let cap = cap.max(1);
+        let mut lines: Vec<Vec<usize>> = Vec::new();
+        let mut cur: Vec<usize> = Vec::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let mut sep = None;
+            while i < chars.len() && chars[i] == ' ' {
+                sep = Some(i);
+                i += 1;
+            }
+            if i >= chars.len() {
+                break;
+            }
+            let mut j = i;
+            while j < chars.len() && chars[j] != ' ' {
+                j += 1;
+            }
+            if !cur.is_empty() && cur.len() + 1 + (j - i) > cap {
+                lines.push(std::mem::take(&mut cur));
+            }
+            if cur.is_empty() {
+                if j - i <= cap {
+                    cur.extend(i..j);
+                } else {
+                    let mut k = i;
+                    while k < j {
+                        if cur.len() >= cap {
+                            lines.push(std::mem::take(&mut cur));
+                        }
+                        cur.push(k);
+                        k += 1;
+                    }
+                }
+            } else if let Some(s) = sep {
+                cur.push(s);
+                cur.extend(i..j);
+            } else {
+                cur.extend(i..j);
+            }
+            i = j;
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+        lines
+    }
+
+    fn layout_text(
+        chars: &[char],
+        region_w: usize,
+        rows: usize,
+        focus: usize,
+    ) -> (usize, Vec<Vec<usize>>) {
+        if chars.is_empty() || region_w == 0 || rows == 0 {
+            return (1, Vec::new());
+        }
+        let max_s = (rows / 7).max(1);
+        for s in (1..=max_s).rev() {
+            let cap = ((region_w + s) / (6 * s)).max(1);
+            let lines = Self::wrap_chars(chars, cap);
+            if lines.is_empty() {
+                continue;
+            }
+            let need_h = lines.len() * 7 * s + lines.len().saturating_sub(1) * s;
+            if need_h <= rows {
+                return (s, lines);
+            }
+        }
+        let lines = Self::wrap_chars(chars, ((region_w + 1) / 6).max(1));
+        let keep = (rows / 8).max(1);
+        if lines.len() <= keep {
+            return (1, lines);
+        }
+        let mut fi = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains(&focus) {
+                fi = i;
+            }
+        }
+        let start = fi.saturating_sub(keep - 1);
+        (1, lines[start..(start + keep).min(lines.len())].to_vec())
+    }
+
     fn draw_text(
         &mut self,
         values: &[f64],
@@ -552,90 +636,82 @@ impl Renderer {
             };
             mags[i] = (l + r) * 0.5;
         }
-        let mut s = rows / 7;
-        if s < 1 {
-            s = 1;
+        let (s, lines) = Self::layout_text(&text, region_w, rows, m.saturating_sub(1));
+        if lines.is_empty() {
+            return;
         }
-        while s > 1 && s * (6 * m - 1) > region_w {
-            s -= 1;
-        }
-        let mut skip = 0usize;
-        let mut shown = m;
-        if s * (6 * m - 1) > region_w {
-            shown = (region_w + 1) / 6;
-            if shown < 1 {
-                shown = 1;
-            }
-            if shown > m {
-                shown = m;
-            }
-            skip = (m - shown) / 2;
-        }
-        let strip_w = shown * 6 * s - s;
-        let lead = if strip_w < region_w { (region_w - strip_w) / 2 } else { 0 };
-        let gh = 7 * s;
-        let top = if gh < rows { (rows - gh) / 2 } else { 0 };
+        let total_h = lines.len() * 7 * s + lines.len().saturating_sub(1) * s;
+        let top = rows.saturating_sub(total_h) / 2;
         let x_end = (x_start + region_w).min(cols);
         let full = self.render_glyph(8).to_vec();
-        for k in 0..shown {
-            let li = skip + k;
-            let mut v = mags[li];
-            if !(v > 0.0) {
-                v = 0.0;
-            } else if v > 1.0 {
-                v = 1.0;
+        let mut boxes: Vec<(usize, usize, usize)> = Vec::new();
+        for (li, line) in lines.iter().enumerate() {
+            if line.is_empty() {
+                continue;
             }
-            let level = (v * 15.0 + 0.5) as u8;
-            let marker = 64 + level;
-            let glyph = Self::block_glyph(text[li].to_ascii_uppercase());
-            let x0 = x_start + lead + k * 6 * s;
-            let xfrac = (li as f64 + 0.5) / m as f64;
-            let esc = self.letter_color(xfrac, v);
-            let box_w = if k + 1 < shown { 6 * s } else { 5 * s };
-            let mut changed = false;
-            for gr in 0..7 {
-                for pr in 0..s {
-                    let y = top + gr * s + pr;
-                    if y >= rows {
-                        break;
-                    }
-                    for px in 0..box_w {
-                        let x = x0 + px;
-                        if x >= x_end {
+            let wline = line.len() * 6 * s - s;
+            let lead = region_w.saturating_sub(wline) / 2;
+            let y0 = top + li * 8 * s;
+            for (k, &ci) in line.iter().enumerate() {
+                let mut v = mags[ci];
+                if !(v > 0.0) {
+                    v = 0.0;
+                } else if v > 1.0 {
+                    v = 1.0;
+                }
+                let level = (v * 15.0 + 0.5) as u8;
+                let marker = 64 + level;
+                let glyph = Self::block_glyph(text[ci].to_ascii_uppercase());
+                let x0 = x_start + lead + k * 6 * s;
+                let xfrac = (ci as f64 + 0.5) / m as f64;
+                let esc = self.letter_color(xfrac, v);
+                let box_w = if k + 1 < line.len() { 6 * s } else { 5 * s };
+                boxes.push((x0, y0, box_w));
+                let mut changed = false;
+                for gr in 0..7 {
+                    for pr in 0..s {
+                        let y = y0 + gr * s + pr;
+                        if y >= rows {
                             break;
                         }
-                        let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
-                        let want = if on { marker } else { 0 };
-                        if self.prev[y * cols + x] != want {
-                            changed = true;
+                        for px in 0..box_w {
+                            let x = x0 + px;
+                            if x >= x_end {
+                                break;
+                            }
+                            let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
+                            let want = if on { marker } else { 0 };
+                            if self.prev[y * cols + x] != want {
+                                changed = true;
+                            }
                         }
                     }
                 }
-            }
-            if !changed {
-                continue;
-            }
-            for gr in 0..7 {
-                for pr in 0..s {
-                    let y = top + gr * s + pr;
-                    if y >= rows {
-                        break;
-                    }
-                    seek_cell(y as u32, x0 as u32, out);
-                    out.s(&esc);
-                    for px in 0..box_w {
-                        let x = x0 + px;
-                        if x >= x_end {
+                if !changed {
+                    continue;
+                }
+                for gr in 0..7 {
+                    for pr in 0..s {
+                        let y = y0 + gr * s + pr;
+                        if y >= rows {
                             break;
                         }
-                        let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
-                        let want = if on { marker } else { 0 };
-                        let idx = y * cols + x;
-                        self.prev[idx] = want;
-                        if on {
-                            out.s(&full);
-                        } else {
-                            out.s(b" ");
+                        seek_cell(y as u32, x0 as u32, out);
+                        out.s(&esc);
+                        for px in 0..box_w {
+                            let x = x0 + px;
+                            if x >= x_end {
+                                break;
+                            }
+                            let on = px < 5 * s && (glyph[gr] >> (4 - px / s)) & 1 == 1;
+                            let want = if on { marker } else { 0 };
+                            let idx = y * cols + x;
+                            self.prev[idx] = want;
+                            if on {
+                                out.s(&full);
+                            } else {
+                                out.s(b" ");
+                            }
                         }
                     }
                 }
@@ -644,14 +720,10 @@ impl Renderer {
         for y in 0..rows {
             for x in x_start..x_end {
                 let mut in_box = false;
-                if y >= top && y < top + gh {
-                    for k in 0..shown {
-                        let x0 = x_start + lead + k * 6 * s;
-                        let w = if k + 1 < shown { 6 * s } else { 5 * s };
-                        if x >= x0 && x < x0 + w {
-                            in_box = true;
-                            break;
-                        }
+                for &(x0, y0, w) in boxes.iter() {
+                    if y >= y0 && y < y0 + 7 * s && x >= x0 && x < x0 + w {
+                        in_box = true;
+                        break;
                     }
                 }
                 if in_box {
@@ -667,7 +739,8 @@ impl Renderer {
         }
     }
 
-    fn build_barstrings(&mut self) {        let mut bw = if self.bar_width == 0 { 1 } else { self.bar_width };
+    fn build_barstrings(&mut self) {
+        let mut bw = if self.bar_width == 0 { 1 } else { self.bar_width };
         if bw > 8 {
             bw = 8;
         }
@@ -1196,5 +1269,70 @@ mod tests {
         let mut out = Vec::new();
         r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(out.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::Renderer;
+
+    fn chars(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+
+    #[test]
+    fn short_text_stays_big_single_line() {
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1);
+        assert_eq!(s, 3);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], vec![0, 1]);
+    }
+
+    #[test]
+    fn long_text_shrinks_before_wrapping() {
+        let (s, lines) = Renderer::layout_text(&chars("HELLO WORLD"), 80, 24, 10);
+        assert_eq!(lines.len(), 1);
+        assert!(s < 3);
+        let flat: Vec<usize> = lines.concat();
+        assert_eq!(flat.len(), 11);
+    }
+
+    #[test]
+    fn overflow_wraps_to_two_lines() {
+        let text = chars("ONE TWO THREE FOUR");
+        let (s, lines) = Renderer::layout_text(&text, 60, 24, 17);
+        assert!(lines.len() >= 2);
+        for line in &lines {
+            assert!((line.len() * 6 - 1) * s <= 60);
+        }
+        let flat: Vec<usize> = lines.concat();
+        assert!(flat.contains(&17));
+        assert!(flat.len() < text.len() + 1);
+    }
+
+    #[test]
+    fn narrow_region_splits_words() {
+        let text = chars("AB CD EF");
+        let (s, lines) = Renderer::layout_text(&text, 18, 24, 7);
+        assert_eq!(s, 1);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], vec![0, 1]);
+        assert_eq!(lines[2], vec![6, 7]);
+    }
+
+    #[test]
+    fn impossible_sizes_keep_focus_visible() {
+        let text = chars("ONE TWO THREE FOUR FIVE SIX SEVEN EIGHT");
+        let (_, lines) = Renderer::layout_text(&text, 40, 24, 38);
+        let flat: Vec<usize> = lines.concat();
+        assert!(flat.contains(&38));
+        assert!(flat.len() < text.len());
+    }
+
+    #[test]
+    fn empty_or_zero_is_safe() {
+        assert_eq!(Renderer::layout_text(&[], 80, 24, 0).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1).1.len(), 0);
     }
 }
