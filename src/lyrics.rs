@@ -1172,18 +1172,6 @@ impl LyricWorker {
         });
     }
 
-    fn fallback_title(track: &Track, static_text: &str) -> String {
-        if track.present && (!track.artist.is_empty() || !track.title.is_empty()) {
-            let a = track.artist.trim();
-            let t = track.title.trim();
-            if !a.is_empty() && !t.is_empty() {
-                return format!("{} - {}", a, t);
-            }
-            return format!("{}{}", a, t);
-        }
-        static_text.to_string()
-    }
-
     fn live_pos(&self, track: &Track) -> f64 {
         if self.lines.is_empty() {
             if track.present && track.key() == self.key {
@@ -1194,9 +1182,9 @@ impl LyricWorker {
         self.live_position()
     }
 
-    pub fn display_lines(&self, track: &Track, static_text: &str) -> Vec<(String, bool)> {
-        if self.lines.is_empty() {
-            return vec![(Self::fallback_title(track, static_text), true)];
+    pub fn display_lines(&self, track: &Track, _static_text: &str) -> Vec<(String, bool)> {
+        if !track.present || self.lines.is_empty() {
+            return vec![(String::new(), true)];
         }
         let pos = self.cur_pos(track);
         let mut current: Option<String> = None;
@@ -1211,9 +1199,9 @@ impl LyricWorker {
         }
     }
 
-    pub fn display_context(&self, track: &Track, static_text: &str) -> Vec<(String, bool)> {
-        if self.lines.is_empty() {
-            return vec![(Self::fallback_title(track, static_text), true)];
+    pub fn display_context(&self, track: &Track, _static_text: &str) -> Vec<(String, bool)> {
+        if !track.present || self.lines.is_empty() {
+            return vec![(String::new(), true)];
         }
         let pos = self.cur_pos(track);
         let mut idx: Option<usize> = None;
@@ -1400,12 +1388,24 @@ mod worker_tests {
     }
 
     #[test]
-    fn falls_back_without_lines() {
+    fn blank_without_lines() {
         let w = worker_with(vec![]);
-        assert_eq!(w.display_lines(&track_at(3.0), "STATIC"), vec![("a - b".to_string(), true)]);
+        assert_eq!(w.display_lines(&track_at(3.0), "STATIC"), vec![(String::new(), true)]);
         let mut no_track = track_at(0.0);
         no_track.present = false;
-        assert_eq!(w.display_lines(&no_track, "STATIC"), vec![("STATIC".to_string(), true)]);
+        assert_eq!(w.display_lines(&no_track, "STATIC"), vec![(String::new(), true)]);
+        assert_eq!(w.display_context(&track_at(3.0), "STATIC"), vec![(String::new(), true)]);
+    }
+
+    #[test]
+    fn blank_when_track_not_present() {
+        let w = worker_with(vec![
+            LyricLine { t: 10.0, text: "old song".to_string(), words: Vec::new() },
+        ]);
+        let mut gone = track_at(50.0);
+        gone.present = false;
+        assert_eq!(w.display_lines(&gone, "STATIC"), vec![(String::new(), true)]);
+        assert_eq!(w.display_context(&gone, "STATIC"), vec![(String::new(), true)]);
     }
 
     #[test]

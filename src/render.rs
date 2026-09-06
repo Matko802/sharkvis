@@ -842,6 +842,20 @@ impl Renderer {
         }
     }
 
+    fn clear_text_region(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
+        let x_end = (x_start + region_w).min(self.cols);
+        for y in 0..self.rows {
+            for x in x_start..x_end {
+                let idx = y * self.cols + x;
+                if self.prev[idx] != 0 {
+                    seek_cell(y as u32, x as u32, out);
+                    out.s(b" ");
+                    self.prev[idx] = 0;
+                }
+            }
+        }
+    }
+
     fn draw_small_text(
         &mut self,
         values: &[f64],
@@ -857,6 +871,7 @@ impl Renderer {
         }
         let text = self.text.clone();
         if text.is_empty() {
+            self.clear_text_region(x_start, region_w, out);
             return;
         }
         let m = text.len();
@@ -1009,6 +1024,7 @@ impl Renderer {
         let text = self.text.clone();
         let m = text.len();
         if m == 0 {
+            self.clear_text_region(x_start, region_w, out);
             return;
         }
         let (mags_l, mags_r) = Self::char_raw_mags(values, right, m);
@@ -1757,14 +1773,17 @@ mod tests {
     }
 
     #[test]
-    fn small_text_empty_draws_nothing() {
+    fn small_text_empty_clears_region() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("");
         r.text_small = true;
         let vals = vec![1.0; 16];
         let mut out = Vec::new();
         r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
-        assert!(out.is_empty());
+        assert!(!String::from_utf8_lossy(&out).contains('█'));
+        let mut out2 = Vec::new();
+        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out2, cap: 1 << 20 });
+        assert!(out2.is_empty(), "clean region draws nothing");
     }
 
     #[test]
@@ -1816,12 +1835,22 @@ mod tests {
     }
 
         #[test]
-    fn text_empty_text_draws_nothing() {        let mut r = Renderer::new(24, 80, 2, 1, 8);
+    fn text_empty_text_clears_region() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("");
         let vals = vec![1.0; 8];
         let mut out = Vec::new();
         r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
-        assert!(out.is_empty());
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(!text.contains('█'), "empty text must leave no lit pixels");
+        assert!(text.contains(' '), "empty text must wipe stale glyphs");
+        let mut out2 = Vec::new();
+        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out2, cap: 1 << 20 });
+        assert!(out2.is_empty(), "clean region draws nothing");
+        r.text_small = true;
+        let mut out3 = Vec::new();
+        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out3, cap: 1 << 20 });
+        assert!(out3.is_empty(), "clean region draws nothing in small mode");
     }
 }
 
