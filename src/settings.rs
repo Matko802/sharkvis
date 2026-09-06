@@ -30,9 +30,8 @@ const S_TEXTSRC: usize = 17;
 const S_TEXTSIZE: usize = 18;
 const S_PROVIDER: usize = 19;
 const S_OFFSET: usize = 20;
-const S_FIX: usize = 21;
-const S_MODEL: usize = 22;
-const S_COUNT: usize = 23;
+const S_STYLE: usize = 21;
+const S_COUNT: usize = 22;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -58,8 +57,7 @@ const LABELS: [&str; S_COUNT] = [
     "text size",
     "provider",
     "offset ms",
-    "fix lyrics",
-    "fix model",
+    "text style",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -254,15 +252,16 @@ impl SettingsUi {
                     *changed |= CH_LAYOUT;
                 }
             }
-            S_FIX => {
-                cfg.correction = !cfg.correction;
-            }
             S_TEXTSIZE => {
                 let v = (cfg.text_size as i64 + dir).clamp(0, 5) as u32;
                 if v != cfg.text_size {
                     cfg.text_size = v;
                     *changed |= CH_LAYOUT;
                 }
+            }
+            S_STYLE => {
+                cfg.text_style = if cfg.text_style == "small" { "big".to_string() } else { "small".to_string() };
+                *changed |= CH_LAYOUT;
             }
             _ => {}
         }
@@ -286,7 +285,7 @@ impl SettingsUi {
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
             "text" => rows.extend_from_slice(&[
-                S_TEXT, S_TEXTSRC, S_TEXTSIZE, S_PROVIDER, S_OFFSET, S_FIX, S_MODEL, S_SENS,
+                S_TEXT, S_TEXTSRC, S_TEXTSIZE, S_STYLE, S_PROVIDER, S_OFFSET, S_SENS,
                 S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
             _ => {}
@@ -339,7 +338,7 @@ impl SettingsUi {
                 self.clamp_sel(cfg);
             }
             KEY_ENTER => {
-                if self.sel == S_CHARSET || self.sel == S_TEXT || self.sel == S_MODEL {
+                if self.sel == S_CHARSET || self.sel == S_TEXT {
                     *changed |= CH_EDITOR;
                 }
             }
@@ -389,8 +388,6 @@ impl SettingsUi {
             panel_row(out, cap, y, pw, "edit bar symbols", Some("enter = nano"), None);
         } else if self.sel == S_TEXT {
             panel_row(out, cap, y, pw, "edit big text", Some("enter = nano"), None);
-        } else if self.sel == S_MODEL {
-            panel_row(out, cap, y, pw, "edit fix model", Some("enter = nano"), None);
         } else {
             panel_row(
                 out,
@@ -461,14 +458,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         }
         S_PROVIDER => cfg.provider.clone(),
         S_OFFSET => format!("{:+}ms", cfg.lyric_offset_ms),
-        S_FIX => {
-            if cfg.correction {
-                "on".to_string()
-            } else {
-                "off".to_string()
-            }
-        }
-        S_MODEL => cfg.correction_model.clone(),
+        S_STYLE => cfg.text_style.clone(),
         _ => String::new(),
     }
 }

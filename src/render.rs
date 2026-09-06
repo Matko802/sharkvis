@@ -53,6 +53,10 @@ pub struct Renderer {
     focus: usize,
     pub text_left: bool,
     pub text_size: usize,
+    pub text_small: bool,
+    text_pk_l: Vec<f64>,
+    text_pk_r: Vec<f64>,
+    text_gpk: f64,
 }
 
 #[derive(Default)]
@@ -281,6 +285,10 @@ impl Renderer {
             focus: 0,
             text_left: false,
             text_size: 1,
+            text_small: false,
+            text_pk_l: Vec::new(),
+            text_pk_r: Vec::new(),
+            text_gpk: 0.0,
         };
         r.set_glyphs(None);
         r
@@ -654,24 +662,7 @@ impl Renderer {
         (1, lines[start..(start + keep).min(lines.len())].to_vec())
     }
 
-    fn draw_text(
-        &mut self,
-        values: &[f64],
-        right: Option<&[f64]>,
-        x_start: usize,
-        region_w: usize,
-        out: &mut Out,
-    ) {
-        let rows = self.rows;
-        let cols = self.cols;
-        if rows == 0 || region_w == 0 {
-            return;
-        }
-        let text = self.text.clone();
-        let m = text.len();
-        if m == 0 {
-            return;
-        }
+    fn char_raw_mags(values: &[f64], right: Option<&[f64]>, m: usize) -> (Vec<f64>, Vec<f64>) {
         let mut mags_l = vec![0.0f64; m];
         let mut mags_r = vec![0.0f64; m];
         for i in 0..m {
@@ -696,6 +687,182 @@ impl Renderer {
                 None => mags_l[i],
             };
         }
+        (mags_l, mags_r)
+    }
+
+    fn agc_text(&mut self, l: &mut [f64], r: &mut [f64]) {
+        const DECAY: f64 = 0.94;
+        const FLOOR: f64 = 0.02;
+        let m = l.len();
+        if self.text_pk_l.len() != m || self.text_pk_r.len() != m {
+            self.text_pk_l = vec![0.0; m];
+            self.text_pk_r = vec![0.0; m];
+        }
+        let mut frame = 0.0f64;
+        for i in 0..m {
+            frame = frame.max(l[i]).max(r[i]);
+            let pl = &mut self.text_pk_l[i];
+            *pl = l[i].max(*pl * DECAY);
+            l[i] = if *pl < FLOOR { 0.0 } else { (l[i] / *pl).min(1.0) };
+            let pr = &mut self.text_pk_r[i];
+            *pr = r[i].max(*pr * DECAY);
+            r[i] = if *pr < FLOOR { 0.0 } else { (r[i] / *pr).min(1.0) };
+        }
+        self.text_gpk = frame.max(self.text_gpk * DECAY);
+        let gate = (self.text_gpk * 2.0).clamp(0.0, 1.0);
+        if gate < 1.0 {
+            for v in l.iter_mut().chain(r.iter_mut()) {
+                *v *= gate;
+            }
+        }
+    }
+
+    fn draw_text_mode(
+        &mut self,
+        values: &[f64],
+        right: Option<&[f64]>,
+        x_start: usize,
+        region_w: usize,
+        out: &mut Out,
+    ) {
+        if self.text_small {
+            self.draw_small_text(values, right, x_start, region_w, out);
+        } else {
+            self.draw_text(values, right, x_start, region_w, out);
+        }
+    }
+
+    fn draw_small_text(
+        &mut self,
+        values: &[f64],
+        right: Option<&[f64]>,
+        x_start: usize,
+        region_w: usize,
+        out: &mut Out,
+    ) {
+        let rows = self.rows;
+        let cols = self.cols;
+        if rows == 0 || region_w == 0 {
+            return;
+        }
+        let text = self.text.clone();
+        if text.is_empty() {
+            return;
+        }
+        let m = text.len();
+        let (mut mags_l, mut mags_r) = Self::char_raw_mags(values, right, m);
+        self.agc_text(&mut mags_l, &mut mags_r);
+        let v = (self.text_gpk * 2.0).clamp(0.0, 1.0);
+        let marker = 64 + (v * 15.0 + 0.5) as u8;
+        let esc = self.letter_color(0.5, v);
+        let mut paras: Vec<&[char]> = Vec::new();
+        let mut start = 0;
+        for (i, c) in text.iter().enumerate() {
+            if *c == '\n' {
+                paras.push(&text[start..i]);
+                start = i + 1;
+            }
+        }
+        paras.push(&text[start..]);
+        let mut lines: Vec<&[char]> = Vec::new();
+        for p in paras {
+            if p.is_empty() {
+                lines.push(&p[0..0]);
+                continue;
+            }
+            let mut k = 0;
+            while k < p.len() {
+                let end = (k + region_w).min(p.len());
+                lines.push(&p[k..end]);
+                k = end;
+            }
+        }
+        if lines.len() > rows {
+            lines.truncate(rows);
+        }
+        let x_end = (x_start + region_w).min(cols);
+        let top = rows.saturating_sub(lines.len()) / 2;
+        let mut boxes: Vec<(usize, usize, usize)> = Vec::new();
+        let mut enc = [0u8; 4];
+        for (li, line) in lines.iter().enumerate() {
+            let y = top + li;
+            if y >= rows {
+                break;
+            }
+            let len = line.len().min(region_w);
+            let x0 = if self.text_left {
+                x_start
+            } else {
+                x_start + region_w.saturating_sub(len) / 2
+            };
+            boxes.push((x0, y, len.min(x_end.saturating_sub(x0))));
+            let mut changed = false;
+            for (px, _) in line.iter().take(len).enumerate() {
+                let x = x0 + px;
+                if x >= x_end {
+                    break;
+                }
+                if self.prev[y * cols + x] != marker {
+                    changed = true;
+                    break;
+                }
+            }
+            if !changed {
+                continue;
+            }
+            seek_cell(y as u32, x0 as u32, out);
+            out.s(&esc);
+            for (px, c) in line.iter().take(len).enumerate() {
+                let x = x0 + px;
+                if x >= x_end {
+                    break;
+                }
+                self.prev[y * cols + x] = marker;
+                out.s(c.encode_utf8(&mut enc).as_bytes());
+            }
+        }
+        for y in 0..rows {
+            for x in x_start..x_end {
+                let mut in_box = false;
+                for &(x0, y0, w) in boxes.iter() {
+                    if y == y0 && x >= x0 && x < x0 + w {
+                        in_box = true;
+                        break;
+                    }
+                }
+                if in_box {
+                    continue;
+                }
+                let idx = y * cols + x;
+                if self.prev[idx] != 0 {
+                    seek_cell(y as u32, x as u32, out);
+                    out.s(b" ");
+                    self.prev[idx] = 0;
+                }
+            }
+        }
+    }
+
+    fn draw_text(
+        &mut self,
+        values: &[f64],
+        right: Option<&[f64]>,
+        x_start: usize,
+        region_w: usize,
+        out: &mut Out,
+    ) {
+        let rows = self.rows;
+        let cols = self.cols;
+        if rows == 0 || region_w == 0 {
+            return;
+        }
+        let text = self.text.clone();
+        let m = text.len();
+        if m == 0 {
+            return;
+        }
+        let (mut mags_l, mut mags_r) = Self::char_raw_mags(values, right, m);
+        self.agc_text(&mut mags_l, &mut mags_r);
         let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size);
         if lines.is_empty() {
             return;
@@ -1256,7 +1423,7 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Text => self.draw_text(values, None, self.x_off, region, &mut o),
+            RenderMode::Text => self.draw_text_mode(values, None, self.x_off, region, &mut o),
             RenderMode::Bars => {
                 self.draw_bars(values, None, self.num_bars, self.num_bars, self.x_off, region, &mut o)
             }
@@ -1280,7 +1447,7 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Text => self.draw_text(left, Some(right), self.x_off, region, &mut o),
+            RenderMode::Text => self.draw_text_mode(left, Some(right), self.x_off, region, &mut o),
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),
@@ -1342,6 +1509,58 @@ mod tests {
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("\x1b[38;2;64;64;64m"), "loud left side must be bright, got {:?}", &text[..text.len().min(200)]);
         assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet right side must be dim");
+    }
+
+    #[test]
+    fn text_agc_lifts_quiet_tail() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        let n = 64;
+        let vals: Vec<f64> = (0..n).map(|i| 0.9 - 0.85 * i as f64 / n as f64).collect();
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for _ in 0..5 {
+            let (mut ra, mut rb) = Renderer::char_raw_mags(&vals, Some(&vals), 8);
+            r.agc_text(&mut ra, &mut rb);
+            a = ra;
+            b = rb;
+        }
+        assert!((a[0] - 1.0).abs() < 1e-6, "loud head stays full, got {}", a[0]);
+        assert!(a[7] > 0.5, "quiet tail must normalize up, got {}", a[7]);
+        assert!(b[7] > 0.5, "quiet tail must normalize up, got {}", b[7]);
+    }
+
+    #[test]
+    fn text_agc_keeps_silence_dark() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        let vals = vec![0.0; 64];
+        let (mut a, mut b) = Renderer::char_raw_mags(&vals, Some(&vals), 8);
+        r.agc_text(&mut a, &mut b);
+        assert!(a.iter().all(|&v| v == 0.0));
+        assert!(b.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn small_text_draws_plain_centered_line() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("Hi there");
+        r.text_small = true;
+        let vals = vec![1.0; 16];
+        let mut out = Vec::new();
+        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("Hi there"), "plain line must be emitted, got {:?}", &text[..text.len().min(120)]);
+        assert!(!text.contains('█'), "small mode must not use block glyphs");
+        assert!(text.contains("\x1b[12;37H"), "8-char line centers at col 37 row 12, got {:?}", &text[..text.len().min(120)]);
+    }
+
+    #[test]
+    fn small_text_empty_draws_nothing() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("");
+        r.text_small = true;
+        let vals = vec![1.0; 16];
+        let mut out = Vec::new();
+        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        assert!(out.is_empty());
     }
 
         #[test]

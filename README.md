@@ -54,10 +54,13 @@ are saved automatically when you close the panel or quit.
 ## Modes
 
 `bars`, `wave`, `oscilloscope`, `text` (switch in the panel with `g`).
-`text` renders a big block-letter word, each letter lit by its own
-frequency bin. With `text_source = lyrics` it shows the currently sung
-word, one at a time, the left side following the left channel and the
-right side following the right channel.
+`text` renders the current lyric line (or the static `text`) in big
+block letters, each letter lit by its own frequency bin with
+auto-gain so quiet treble at the end of the line reacts as hard as
+bass at the start. `text_size` 1-5 scales the letters (`0` = auto),
+`text_style = small` renders the same line as plain small terminal
+text instead, pulsing with the overall level. The left side follows
+the left channel and the right side the right channel.
 
 ```ini
 [visualizer]
@@ -65,6 +68,7 @@ mode = text
 text = SHARKVIS
 text_source = lyrics
 text_size = 1
+text_style = big
 
 [lyrics]
 folder = ~/Music
@@ -83,12 +87,6 @@ lyrics spread over the track), then YouTube auto-captions via `yt-dlp`
 Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
 whitelists MPRIS players (first playing match wins, `playerctld`
 preferred); empty means any. `p` cycles the preferred provider.
-
-Untrusted sources (everything except local files and synced lrclib)
-are cleaned up by a local Ollama model (`fix lyrics` on by default,
-`fix model`, `ollama_host` in config): obvious transcription mistakes
-get fixed, timestamps untouched. Replies that drop lines or share no
-words with the original are thrown away, originals kept.
 
 Text-mode keys (lyrics showing): `s` manual search (`Artist - Title`),
 `l` cycle media player, `r` force lyric reload, `c` left/center align,

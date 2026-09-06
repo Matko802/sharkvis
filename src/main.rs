@@ -759,14 +759,12 @@ fn main() {
             &FetchOpts {
                 local_folder: cfg.lyrics_folder.clone(),
                 provider: cfg.provider.clone(),
-                correct: cfg.correction,
-                model: cfg.correction_model.clone(),
-                host: cfg.ollama_host.clone(),
             },
         );
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;
+        rnd.text_small = cfg.text_style == "small";
         if cfg.provider != last_provider {
             last_provider = cfg.provider.clone();
             lyric.poke();
