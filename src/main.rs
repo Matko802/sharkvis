@@ -25,8 +25,8 @@ use crate::mpris::{poll_named, poll_position, poll_track, Track};
 use crate::render::{RenderMode, Renderer};
 use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
-    term_raw_enter, term_raw_restore, term_read_codepoint, term_winsize, KEY_BACKSPACE, KEY_CHAR,
-    KEY_ENTER, KEY_ESC,
+    term_cell_aspect, term_raw_enter, term_raw_restore, term_read_codepoint, term_winsize,
+    KEY_BACKSPACE, KEY_CHAR, KEY_ENTER, KEY_ESC,
 };
 
 const VIS_EPS: f64 = 0.001;
@@ -97,6 +97,10 @@ fn bar_count_for(cols: u32, cfg: &Config) -> usize {
     } else {
         b
     }
+}
+
+fn yscale_for(fd: i32) -> usize {
+    ((2.0 / term_cell_aspect(fd)).round() as usize).clamp(1, 4)
 }
 
 fn per_ch_left(bars: usize, channels: u32) -> usize {
@@ -412,6 +416,7 @@ fn main() {
     rnd.set_glyphs(Some(&cfg.glyphs));
     rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
+    rnd.yscale = yscale_for(1);
 
     let mut heights: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
     let mut last_h: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
@@ -635,6 +640,7 @@ fn main() {
                 last_h[0] = vec![0.001; bars];
                 last_h[1] = vec![0.001; bars];
                 rnd.resize(rows as usize, cols as usize, bars);
+                rnd.yscale = yscale_for(1);
                 if in_settings {
                     rnd.set_offset(panel_width_for(cols));
                 }

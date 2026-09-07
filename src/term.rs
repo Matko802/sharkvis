@@ -24,6 +24,24 @@ pub fn term_winsize(fd: RawFd, rows: &mut u32, cols: &mut u32) -> bool {
     true
 }
 
+pub fn term_cell_aspect(fd: RawFd) -> f64 {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } != 0
+        || ws.ws_row == 0
+        || ws.ws_col == 0
+        || ws.ws_xpixel == 0
+        || ws.ws_ypixel == 0
+    {
+        return 2.0;
+    }
+    let cw = ws.ws_xpixel as f64 / ws.ws_col as f64;
+    let ch = ws.ws_ypixel as f64 / ws.ws_row as f64;
+    if !(cw > 0.0) || !(ch > 0.0) {
+        return 2.0;
+    }
+    (ch / cw).clamp(0.5, 3.0)
+}
+
 pub fn term_raw_enter(fd: RawFd) -> bool {
     let mut t: libc::termios = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(fd, &mut t) } != 0 {
@@ -154,4 +172,14 @@ pub fn term_read_codepoint(fd: RawFd, out: &mut [u8; 8]) -> (i32, usize) {
         }
     }
     (KEY_CHAR, got)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cell_aspect_defaults_without_pixels() {
+        assert_eq!(term_cell_aspect(-1), 2.0);
+    }
 }

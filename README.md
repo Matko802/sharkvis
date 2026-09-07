@@ -57,7 +57,10 @@ are saved automatically when you close the panel or quit.
 `text` renders the current lyric line (or the static `text`) in big
 block letters, each letter lit by its own frequency bin exactly like
 the bars: bin value drives letter brightness the way it drives bar
-height, no auto-gain. `text_size` 1-5 scales the letters (`0` = auto
+height, no auto-gain. Glyph rows scale to your terminal's cell
+aspect (read from the window pixel size, classic 1:2 assumed when
+unknown) so letters stay proportioned on square-ish fonts.
+`text_size` 1-5 scales the letters (`0` = auto
 fit); an explicit size keeps its scale and crops to a window that
 follows the current line when taller than the screen,
 `text_style = normal` renders the same line as plain small terminal

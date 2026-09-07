@@ -61,6 +61,7 @@ pub struct Renderer {
     pub text_size: usize,
     pub text_small: bool,
     pub loading: bool,
+    pub yscale: usize,
     spin_t0: Option<std::time::Instant>,
 }
 
@@ -292,6 +293,7 @@ impl Renderer {
             text_size: 1,
             text_small: false,
             loading: false,
+            yscale: 1,
             spin_t0: None,
         };
         r.set_glyphs(None);
@@ -740,11 +742,13 @@ impl Renderer {
         rows: usize,
         focus: usize,
         max_s: usize,
+        yscale: usize,
     ) -> (usize, Vec<Vec<usize>>) {
+        let ys = yscale.max(1);
         if chars.is_empty() || region_w == 0 || rows == 0 {
             return (1, Vec::new());
         }
-        let auto_s = (rows / 7).max(1);
+        let auto_s = (rows / (7 * ys)).max(1);
         let mut paras: Vec<(usize, Vec<char>)> = Vec::new();
         let mut start = 0;
         for (i, c) in chars.iter().enumerate() {
@@ -776,13 +780,14 @@ impl Renderer {
         let top_s = if max_s == 0 { auto_s } else { max_s.min(auto_s).max(1) };
         if max_s != 0 {
             let s = top_s;
+            let sy = s * ys;
             let lines = wrap_all((region_w / s).max(1));
             if lines.is_empty() {
                 return (s, lines);
             }
             let hs: Vec<usize> =
-                lines.iter().map(|l| Self::line_height(l, &heights) * s).collect();
-            let mut total = lines.len().saturating_sub(1) * s;
+                lines.iter().map(|l| Self::line_height(l, &heights) * sy).collect();
+            let mut total = lines.len().saturating_sub(1) * sy;
             for h in &hs {
                 total += h;
             }
@@ -800,14 +805,14 @@ impl Renderer {
             let mut used = hs[fi];
             loop {
                 let mut grew = false;
-                if hi + 1 < lines.len() && used + s + hs[hi + 1] <= rows {
+                if hi + 1 < lines.len() && used + sy + hs[hi + 1] <= rows {
                     hi += 1;
-                    used += s + hs[hi];
+                    used += sy + hs[hi];
                     grew = true;
                 }
-                if lo > 0 && used + s + hs[lo - 1] <= rows {
+                if lo > 0 && used + sy + hs[lo - 1] <= rows {
                     lo -= 1;
-                    used += s + hs[lo];
+                    used += sy + hs[lo];
                     grew = true;
                 }
                 if !grew {
@@ -822,16 +827,17 @@ impl Renderer {
             if lines.is_empty() {
                 continue;
             }
-            let mut need_h = lines.len().saturating_sub(1) * s;
+            let sy = s * ys;
+            let mut need_h = lines.len().saturating_sub(1) * sy;
             for line in &lines {
-                need_h += Self::line_height(line, &heights) * s;
+                need_h += Self::line_height(line, &heights) * sy;
             }
             if need_h <= rows {
                 return (s, lines);
             }
         }
         let lines = wrap_all(region_w.max(1));
-        let keep = (rows / 8).max(1);
+        let keep = (rows / (8 * ys)).max(1);
         if lines.len() <= keep {
             return (1, lines);
         }
@@ -888,8 +894,13 @@ impl Renderer {
         let now = std::time::Instant::now();
         let t0 = *self.spin_t0.get_or_insert(now);
         let active = Self::spin_frame(now.saturating_duration_since(t0).as_millis());
-        let ox = x_start + region_w.saturating_sub(8) / 2;
-        let oy = rows.saturating_sub(8) / 2;
+        let ys = self.yscale.max(1);
+        let bw = 4usize;
+        let bh = 2 * ys;
+        let px = bw + 2;
+        let py = bh + ys;
+        let ox = x_start + region_w.saturating_sub(2 * px + bw) / 2;
+        let oy = rows.saturating_sub(2 * py + bh) / 2;
         let x_end = (x_start + region_w).min(cols);
         let full = self.render_glyph(8).to_vec();
         let esc_on = self.letter_color(0.5, 1.0);
@@ -898,14 +909,14 @@ impl Renderer {
         for (i, &(gc, gr)) in POS.iter().enumerate() {
             let on = i == active;
             let marker = if on { 79 } else { 66 };
-            let bx = ox + gc * 3;
-            let by = oy + gr * 3;
+            let bx = ox + gc * px;
+            let by = oy + gr * py;
             boxes.push((bx, by));
             let mut changed = false;
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let x = ox + gc * 3 + dx;
-                    let y = oy + gr * 3 + dy;
+            for dy in 0..bh {
+                for dx in 0..bw {
+                    let x = bx + dx;
+                    let y = by + dy;
                     if x >= x_end || y >= rows {
                         continue;
                     }
@@ -917,14 +928,14 @@ impl Renderer {
             if !changed {
                 continue;
             }
-            for dy in 0..2 {
-                let y = oy + gr * 3 + dy;
+            for dy in 0..bh {
+                let y = by + dy;
                 if y >= rows {
                     break;
                 }
                 seek_cell(y as u32, bx as u32, out);
                 out.s(if on { &esc_on } else { &esc_off });
-                for dx in 0..2 {
+                for dx in 0..bw {
                     let x = bx + dx;
                     if x >= x_end {
                         break;
@@ -938,7 +949,7 @@ impl Renderer {
             for x in x_start..x_end {
                 let mut in_box = false;
                 for &(bx, by) in boxes.iter() {
-                    if y >= by && y < by + 2 && x >= bx && x < bx + 2 {
+                    if y >= by && y < by + bh && x >= bx && x < bx + bw {
                         in_box = true;
                         break;
                     }
@@ -1162,17 +1173,19 @@ impl Renderer {
             return;
         }
         let (mags_l, mags_r) = Self::char_raw_mags(values, right, m);
-        let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size);
+        let ys = self.yscale.max(1);
+        let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size, ys);
         if lines.is_empty() {
             return;
         }
+        let sy = s * ys;
         let mut heights = vec![7usize; m];
         for (i, c) in text.iter().enumerate() {
             heights[i] = Self::glyph_wh(*c).1;
         }
-        let mut total_h = lines.len().saturating_sub(1) * s;
+        let mut total_h = lines.len().saturating_sub(1) * sy;
         for line in &lines {
-            total_h += Self::line_height(line, &heights) * s;
+            total_h += Self::line_height(line, &heights) * sy;
         }
         let top = rows.saturating_sub(total_h) / 2;
         let x_end = (x_start + region_w).min(cols);
@@ -1220,8 +1233,8 @@ impl Renderer {
                 boxes.push((x0, y0, box_w, lh));
                 let mut changed = false;
                 for gr in 0..lh {
-                    for pr in 0..s {
-                        let y = y0 + gr * s + pr;
+                    for pr in 0..sy {
+                        let y = y0 + gr * sy + pr;
                         if y >= rows {
                             break;
                         }
@@ -1243,8 +1256,8 @@ impl Renderer {
                     continue;
                 }
                 for gr in 0..lh {
-                    for pr in 0..s {
-                        let y = y0 + gr * s + pr;
+                    for pr in 0..sy {
+                        let y = y0 + gr * sy + pr;
                         if y >= rows {
                             break;
                         }
@@ -1269,13 +1282,13 @@ impl Renderer {
                 }
                 x0 += box_w;
             }
-            y0 += (lh + 1) * s;
+            y0 += (lh + 1) * sy;
         }
         for y in 0..rows {
             for x in x_start..x_end {
                 let mut in_box = false;
                 for &(x0, y0, w, h) in boxes.iter() {
-                    if y >= y0 && y < y0 + h * s && x >= x0 && x < x0 + w {
+                    if y >= y0 && y < y0 + h * sy && x >= x0 && x < x0 + w {
                         in_box = true;
                         break;
                     }
@@ -1944,7 +1957,7 @@ mod tests {
     #[test]
     fn mixed_line_picks_tall_scale() {
         let text: Vec<char> = "A中".chars().collect();
-        let (s, lines) = Renderer::layout_text(&text, 80, 24, 1, 0);
+        let (s, lines) = Renderer::layout_text(&text, 80, 24, 1, 0, 1);
         assert_eq!(s, 1);
         assert_eq!(lines, vec![vec![0, 1]]);
     }
@@ -1986,8 +1999,8 @@ mod tests {
         r.draw_text_mode(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains('█'), "spinner must draw boxes");
-        assert_eq!(r.prev[8 * 80 + 36], 79, "first box active at t=0");
-        assert_eq!(r.prev[8 * 80 + 39], 66, "other boxes dim");
+        assert_eq!(r.prev[8 * 80 + 32], 79, "first box active at t=0");
+        assert_eq!(r.prev[8 * 80 + 38], 66, "other boxes dim");
         assert_eq!(r.prev[12 * 80 + 40], 0, "center square stays empty");
     }
 
@@ -2021,7 +2034,7 @@ mod layout_tests {
 
     #[test]
     fn short_text_stays_big_single_line() {
-        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 0);
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 0, 1);
         assert_eq!(s, 3);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], vec![0, 1]);
@@ -2029,17 +2042,17 @@ mod layout_tests {
 
     #[test]
     fn fixed_size_caps_scale() {
-        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 1);
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 1, 1);
         assert_eq!(s, 1);
         assert_eq!(lines.len(), 1);
-        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 5);
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 5, 1);
         assert_eq!(s, 3);
         assert_eq!(lines.len(), 1);
     }
 
     #[test]
     fn long_text_shrinks_before_wrapping() {
-        let (s, lines) = Renderer::layout_text(&chars("HELLO WORLD"), 80, 24, 10, 0);
+        let (s, lines) = Renderer::layout_text(&chars("HELLO WORLD"), 80, 24, 10, 0, 1);
         assert_eq!(lines.len(), 1);
         assert!(s < 3);
         let flat: Vec<usize> = lines.concat();
@@ -2049,7 +2062,7 @@ mod layout_tests {
     #[test]
     fn overflow_wraps_to_two_lines() {
         let text = chars("ONE TWO THREE FOUR");
-        let (s, lines) = Renderer::layout_text(&text, 60, 24, 17, 0);
+        let (s, lines) = Renderer::layout_text(&text, 60, 24, 17, 0, 1);
         assert!(lines.len() >= 2);
         for line in &lines {
             assert!((line.len() * 6 - 1) * s <= 60);
@@ -2062,7 +2075,7 @@ mod layout_tests {
     #[test]
     fn narrow_region_splits_words() {
         let text = chars("AB CD EF");
-        let (s, lines) = Renderer::layout_text(&text, 18, 24, 7, 0);
+        let (s, lines) = Renderer::layout_text(&text, 18, 24, 7, 0, 1);
         assert_eq!(s, 1);
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], vec![0, 1]);
@@ -2072,7 +2085,7 @@ mod layout_tests {
     #[test]
     fn impossible_sizes_keep_focus_visible() {
         let text = chars("ONE TWO THREE FOUR FIVE SIX SEVEN EIGHT");
-        let (_, lines) = Renderer::layout_text(&text, 40, 24, 38, 0);
+        let (_, lines) = Renderer::layout_text(&text, 40, 24, 38, 0, 1);
         let flat: Vec<usize> = lines.concat();
         assert!(flat.contains(&38));
         assert!(flat.len() < text.len());
@@ -2080,15 +2093,15 @@ mod layout_tests {
 
     #[test]
     fn empty_or_zero_is_safe() {
-        assert_eq!(Renderer::layout_text(&[], 80, 24, 0, 0).1.len(), 0);
-        assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1, 0).1.len(), 0);
-        assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1, 0).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&[], 80, 24, 0, 0, 1).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&chars("HI"), 0, 24, 1, 0, 1).1.len(), 0);
+        assert_eq!(Renderer::layout_text(&chars("HI"), 80, 0, 1, 0, 1).1.len(), 0);
     }
 
     #[test]
     fn explicit_size_windows_overflow_keeping_focus() {
         let text = chars("this is a very long lyric line indeed");
-        let (s, lines) = Renderer::layout_text(&text, 80, 24, 0, 5);
+        let (s, lines) = Renderer::layout_text(&text, 80, 24, 0, 5, 1);
         assert_eq!(s, 3);
         let flat: Vec<usize> = lines.concat();
         assert!(flat.contains(&0));
@@ -2098,7 +2111,7 @@ mod layout_tests {
 
     #[test]
     fn explicit_size_fits_unchanged() {
-        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 5);
+        let (s, lines) = Renderer::layout_text(&chars("HI"), 80, 24, 1, 5, 1);
         assert_eq!(s, 3);
         assert_eq!(lines.len(), 1);
     }
@@ -2106,10 +2119,20 @@ mod layout_tests {
     #[test]
     fn auto_still_shrinks_long_lines() {
         let text = chars("this is a very long lyric line indeed");
-        let (s, lines) = Renderer::layout_text(&text, 80, 24, 0, 0);
+        let (s, lines) = Renderer::layout_text(&text, 80, 24, 0, 0, 1);
         assert_eq!(s, 1);
         assert!(lines.len() >= 2);
         assert!(lines.concat().contains(&0));
+    }
+
+    #[test]
+    fn yscale_doubles_row_heights() {
+        let text = chars("HI");
+        let (s1, _) = Renderer::layout_text(&text, 80, 24, 1, 1, 1);
+        assert_eq!(s1, 1);
+        let (s2, lines2) = Renderer::layout_text(&text, 80, 10, 1, 5, 2);
+        assert_eq!(s2, 1);
+        assert_eq!(lines2, vec![vec![0, 1]]);
     }
 }
 
