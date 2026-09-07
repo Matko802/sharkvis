@@ -416,7 +416,8 @@ fn main() {
     rnd.set_glyphs(Some(&cfg.glyphs));
     rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
-    rnd.yscale = yscale_for(1);
+    let mut auto_yscale = yscale_for(1);
+    rnd.yscale = auto_yscale;
 
     let mut heights: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
     let mut last_h: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
@@ -640,7 +641,8 @@ fn main() {
                 last_h[0] = vec![0.001; bars];
                 last_h[1] = vec![0.001; bars];
                 rnd.resize(rows as usize, cols as usize, bars);
-                rnd.yscale = yscale_for(1);
+                auto_yscale = yscale_for(1);
+                rnd.yscale = auto_yscale;
                 if in_settings {
                     rnd.set_offset(panel_width_for(cols));
                 }
@@ -770,6 +772,11 @@ fn main() {
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;
+        rnd.yscale = if cfg.row_scale == 0 {
+            auto_yscale
+        } else {
+            cfg.row_scale.min(4) as usize
+        };
         rnd.text_small = cfg.text_style == "normal";
         rnd.loading = cfg.text_source == "lyrics" && lyric.loading();
         if cfg.provider != last_provider {

@@ -43,6 +43,7 @@ pub struct Config {
     pub text_source: String,
     pub text_align: String,
     pub text_size: u32,
+    pub row_scale: u32,
     pub text_style: String,
     pub provider: String,
     pub lyric_offset_ms: i64,
@@ -74,6 +75,7 @@ impl Default for Config {
             text_source: "static".to_string(),
             text_align: "center".to_string(),
             text_size: 1,
+            row_scale: 0,
             text_style: "big ahh".to_string(),
             provider: "auto".to_string(),
             lyric_offset_ms: 0,
@@ -332,6 +334,11 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                         cfg.text_size = n.min(5);
                     }
                 }
+                b"row_scale" => {
+                    if let Ok(n) = String::from_utf8_lossy(&val).trim().parse::<u32>() {
+                        cfg.row_scale = n.min(4);
+                    }
+                }
                 b"text_style" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
                     if v == "big ahh" || v == "normal" {
@@ -404,6 +411,7 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("text_source = {}\n", cfg.text_source));
     out.push_str(&format!("text_align = {}\n", cfg.text_align));
     out.push_str(&format!("text_size = {}\n", cfg.text_size));
+    out.push_str(&format!("row_scale = {}\n", cfg.row_scale));
     out.push_str(&format!("text_style = {}\n", cfg.text_style));
     out.push_str(&format!("provider = {}\n", cfg.provider));
     out.push_str(&format!("offset_ms = {}\n", cfg.lyric_offset_ms));
