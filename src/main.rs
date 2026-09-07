@@ -765,6 +765,7 @@ fn main() {
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;
         rnd.text_small = cfg.text_style == "normal";
+        rnd.loading = cfg.text_source == "lyrics" && lyric.loading();
         if cfg.provider != last_provider {
             last_provider = cfg.provider.clone();
             lyric.poke();

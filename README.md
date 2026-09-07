@@ -64,7 +64,9 @@ follows the current line when taller than the screen,
 text instead (`big ahh` is the default block letters), pulsing with the overall level, with the previous and
 next lines above and below forced grey while the current line stays
 audio-reactive. The left side follows
-the left channel and the right side the right channel.
+the left channel and the right side the right channel. While lyrics
+are being fetched, text mode shows an 8-box cycling ring (hollow
+center) instead of a blank area.
 
 Beyond the built-in chunky Latin set, any Unicode script renders via
 embedded GNU Unifont bitmaps (CJK, Hangul, kana, Cyrillic, Greek,

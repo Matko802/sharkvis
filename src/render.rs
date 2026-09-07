@@ -60,6 +60,8 @@ pub struct Renderer {
     pub text_left: bool,
     pub text_size: usize,
     pub text_small: bool,
+    pub loading: bool,
+    spin_t0: Option<std::time::Instant>,
 }
 
 #[derive(Default)]
@@ -289,6 +291,8 @@ impl Renderer {
             text_left: false,
             text_size: 1,
             text_small: false,
+            loading: false,
+            spin_t0: None,
         };
         r.set_glyphs(None);
         r
@@ -869,6 +873,89 @@ impl Renderer {
         (mags_l, mags_r)
     }
 
+    fn spin_frame(elapsed_ms: u128) -> usize {
+        (elapsed_ms / 120 % 8) as usize
+    }
+
+    fn draw_spinner(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
+        let rows = self.rows;
+        let cols = self.cols;
+        if rows == 0 || region_w == 0 {
+            return;
+        }
+        const POS: [(usize, usize); 8] =
+            [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1)];
+        let now = std::time::Instant::now();
+        let t0 = *self.spin_t0.get_or_insert(now);
+        let active = Self::spin_frame(now.saturating_duration_since(t0).as_millis());
+        let ox = x_start + region_w.saturating_sub(8) / 2;
+        let oy = rows.saturating_sub(8) / 2;
+        let x_end = (x_start + region_w).min(cols);
+        let full = self.render_glyph(8).to_vec();
+        let esc_on = self.letter_color(0.5, 1.0);
+        let esc_off = self.letter_color(0.5, 0.12);
+        let mut boxes: Vec<(usize, usize)> = Vec::new();
+        for (i, &(gc, gr)) in POS.iter().enumerate() {
+            let on = i == active;
+            let marker = if on { 79 } else { 66 };
+            let bx = ox + gc * 3;
+            let by = oy + gr * 3;
+            boxes.push((bx, by));
+            let mut changed = false;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let x = ox + gc * 3 + dx;
+                    let y = oy + gr * 3 + dy;
+                    if x >= x_end || y >= rows {
+                        continue;
+                    }
+                    if self.prev[y * cols + x] != marker {
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                continue;
+            }
+            for dy in 0..2 {
+                let y = oy + gr * 3 + dy;
+                if y >= rows {
+                    break;
+                }
+                seek_cell(y as u32, bx as u32, out);
+                out.s(if on { &esc_on } else { &esc_off });
+                for dx in 0..2 {
+                    let x = bx + dx;
+                    if x >= x_end {
+                        break;
+                    }
+                    self.prev[y * cols + x] = marker;
+                    out.s(&full);
+                }
+            }
+        }
+        for y in 0..rows {
+            for x in x_start..x_end {
+                let mut in_box = false;
+                for &(bx, by) in boxes.iter() {
+                    if y >= by && y < by + 2 && x >= bx && x < bx + 2 {
+                        in_box = true;
+                        break;
+                    }
+                }
+                if in_box {
+                    continue;
+                }
+                let idx = y * cols + x;
+                if self.prev[idx] != 0 {
+                    seek_cell(y as u32, x as u32, out);
+                    out.s(b" ");
+                    self.prev[idx] = 0;
+                }
+            }
+        }
+    }
+
     fn draw_text_mode(
         &mut self,
         values: &[f64],
@@ -877,10 +964,15 @@ impl Renderer {
         region_w: usize,
         out: &mut Out,
     ) {
-        if self.text_small {
-            self.draw_small_text(values, right, x_start, region_w, out);
+        if self.loading {
+            self.draw_spinner(x_start, region_w, out);
         } else {
-            self.draw_text(values, right, x_start, region_w, out);
+            self.spin_t0 = None;
+            if self.text_small {
+                self.draw_small_text(values, right, x_start, region_w, out);
+            } else {
+                self.draw_text(values, right, x_start, region_w, out);
+            }
         }
     }
 
@@ -1874,6 +1966,29 @@ mod tests {
         assert_eq!(Renderer::cell_width('é'), 1);
         assert_eq!(Renderer::cell_width('中'), 2);
         assert_eq!(Renderer::cell_width('あ'), 2);
+    }
+
+    #[test]
+    fn spin_frame_cycles_eight_boxes() {
+        assert_eq!(Renderer::spin_frame(0), 0);
+        assert_eq!(Renderer::spin_frame(119), 0);
+        assert_eq!(Renderer::spin_frame(120), 1);
+        assert_eq!(Renderer::spin_frame(959), 7);
+        assert_eq!(Renderer::spin_frame(960), 0);
+    }
+
+    #[test]
+    fn spinner_ring_has_hollow_center() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.loading = true;
+        let vals = vec![0.0; 4];
+        let mut out = Vec::new();
+        r.draw_text_mode(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains('█'), "spinner must draw boxes");
+        assert_eq!(r.prev[8 * 80 + 36], 79, "first box active at t=0");
+        assert_eq!(r.prev[8 * 80 + 39], 66, "other boxes dim");
+        assert_eq!(r.prev[12 * 80 + 40], 0, "center square stays empty");
     }
 
         #[test]

@@ -944,6 +944,10 @@ impl LyricWorker {
         self.last_attempt = None;
     }
 
+    pub fn loading(&self) -> bool {
+        self.rx.is_some() && self.lines.is_empty()
+    }
+
     pub fn reset(&mut self) {
         self.key.clear();
         self.lines.clear();
@@ -1341,6 +1345,17 @@ mod worker_tests {
         w.last_attempt = Some(Instant::now());
         w.update_meta(&track_at(1.0), &FetchOpts::default());
         assert!(w.rx.is_none(), "disconnected fetch must clear so retries resume");
+    }
+
+    #[test]
+    fn loading_only_while_fetching_without_lines() {
+        let mut w = worker_with(vec![]);
+        assert!(!w.loading());
+        let (_tx, rx) = std::sync::mpsc::channel();
+        w.rx = Some(rx);
+        assert!(w.loading());
+        w.lines = vec![LyricLine { t: 1.0, text: "x".to_string(), words: Vec::new() }];
+        assert!(!w.loading());
     }
 }
 
