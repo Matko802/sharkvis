@@ -528,6 +528,21 @@ impl Renderer {
             '[' => [0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E],
             ']' => [0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E],
             '|' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+            '"' => [0x0A, 0x0A, 0x0A, 0x00, 0x00, 0x00, 0x00],
+            '$' => [0x04, 0x0F, 0x14, 0x0E, 0x05, 0x1E, 0x04],
+            '&' => [0x0C, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0D],
+            ';' => [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x08],
+            '<' => [0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02],
+            '>' => [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
+            '@' => [0x0E, 0x11, 0x1B, 0x15, 0x15, 0x10, 0x0E],
+            '\\' => [0x10, 0x10, 0x08, 0x04, 0x02, 0x01, 0x01],
+            '^' => [0x04, 0x0A, 0x11, 0x00, 0x00, 0x00, 0x00],
+            '`' => [0x08, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00],
+            '{' => [0x02, 0x04, 0x04, 0x08, 0x04, 0x04, 0x02],
+            '}' => [0x08, 0x04, 0x04, 0x02, 0x04, 0x04, 0x08],
+            '~' => [0x00, 0x00, 0x0A, 0x15, 0x00, 0x00, 0x00],
+            '•' => [0x00, 0x00, 0x0C, 0x0C, 0x0C, 0x00, 0x00],
+            '°' => [0x0E, 0x0A, 0x0E, 0x00, 0x00, 0x00, 0x00],
             _ => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
         }
     }
@@ -559,6 +574,17 @@ impl Renderer {
             'Ý' | 'ý' | 'ÿ' | 'Ŷ' | 'ŷ' => 'Y',
             'Ź' | 'ź' | 'Ż' | 'ż' | 'Ž' | 'ž' => 'Z',
             'Þ' | 'þ' => 'P',
+            'ß' | 'ẞ' => 'S',
+            'æ' | 'Æ' => 'A',
+            'œ' | 'Œ' => 'O',
+            '¡' => '!',
+            '¿' => '?',
+            '“' | '”' | '„' | '«' | '»' | '‹' | '›' => '"',
+            '‘' | '’' | '‚' => '\'',
+            '–' | '—' | '‐' | '‑' => '-',
+            '…' | '·' => '.',
+            '\u{a0}' | '\t' | '\r' | '\u{2000}'..='\u{200b}' | '\u{202f}' | '\u{205f}'
+            | '\u{3000}' => ' ',
             _ => return None,
         })
     }
@@ -1806,10 +1832,48 @@ mod tests {
         assert_eq!(Renderer::block_glyph('A'), [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11]);
         assert_eq!(Renderer::block_glyph('a'), Renderer::block_glyph('A'));
         assert_eq!(Renderer::block_glyph(' '), [0; 7]);
-        assert_eq!(Renderer::block_glyph('~'), [0; 7]);
+        assert_eq!(
+            Renderer::block_glyph('~'),
+            [0x00, 0x00, 0x0A, 0x15, 0x00, 0x00, 0x00]
+        );
         let e = Renderer::block_glyph('E');
         assert_eq!(e[0], 0x1F);
         assert_eq!(e[3], 0x1E);
+    }
+
+    #[test]
+    fn printable_ascii_never_falls_back_to_tall() {
+        for b in 0x20u8..0x7Fu8 {
+            let c = b as char;
+            let (_, w, h) = Renderer::resolve_glyph(c);
+            assert_eq!((w, h), (5, 7), "ASCII {:?} must stay chunky", c);
+        }
+    }
+
+    #[test]
+    fn lyric_punctuation_folds_to_chunky() {
+        for c in [
+            '\u{2019}', '\u{2018}', '\u{201c}', '\u{201d}', '\u{2013}', '\u{2014}',
+            '\u{2026}', 'ß', ' ', '¡', '¿', '&', '"', '@',
+        ] {
+            let (_, w, h) = Renderer::resolve_glyph(c);
+            assert_eq!((w, h), (5, 7), "{:?} must stay chunky", c);
+        }
+        let (g1, _, _) = Renderer::resolve_glyph('’');
+        let (g2, _, _) = Renderer::resolve_glyph('\'');
+        match (g1, g2) {
+            (BigGlyph::Block(a), BigGlyph::Block(b)) => assert_eq!(a, b),
+            _ => panic!("smart quote must fold to apostrophe"),
+        }
+    }
+
+    #[test]
+    fn truly_unknown_stays_blank_narrow() {
+        assert_eq!(Renderer::glyph_wh(' '), (5, 7));
+        match Renderer::resolve_glyph('􏿿') {
+            (BigGlyph::Blank, _, _) => {}
+            _ => panic!("unassigned codepoints must stay blank"),
+        }
     }
 
     #[test]

@@ -74,7 +74,9 @@ the left channel and the right side the right channel. While lyrics
 are being fetched, text mode shows an 8-box cycling ring (hollow
 center) instead of a blank area.
 
-Beyond the built-in chunky Latin set, any Unicode script renders via
+Beyond the built-in chunky Latin set (full ASCII plus smart
+quotes, dashes, `ß`/`æ`/`œ` and friends folded in), any other
+Unicode script renders via
 embedded GNU Unifont bitmaps (CJK, Hangul, kana, Cyrillic, Greek,
 Arabic presentation forms, …): wide glyphs draw full-height 16px
 tall, narrow ones 8px, mixed lines use the tallest. Common accented

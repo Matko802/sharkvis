@@ -1579,8 +1579,7 @@ mod plain_tests {
 #[cfg(test)]
 mod interp_tests {
     use super::LyricWorker;
-use std::collections::HashSet;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn extrapolates_playback() {
