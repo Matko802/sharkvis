@@ -1228,7 +1228,7 @@ impl Renderer {
                     v = 1.0;
                 }
                 let marker = 64 + (v * 15.0 + 0.5) as u8;
-                let xfrac = (ci as f64 + 0.5) / m as f64;
+                let xfrac = (k as f64 + 0.5) / line.len() as f64;
                 let esc = self.letter_color(xfrac, v);
                 boxes.push((x0, y0, box_w, lh));
                 let mut changed = false;
@@ -1846,6 +1846,20 @@ mod tests {
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("\x1b[38;2;64;64;64m"), "loud left side must be bright, got {:?}", &text[..text.len().min(200)]);
         assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet right side must be dim");
+    }
+
+    #[test]
+    fn wrapped_line_restarts_gradient() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_text("A\nZY");
+        r.grad_lo = 0x000000;
+        r.grad_hi = 0xffffff;
+        let vals = vec![1.0; 8];
+        let mut out = Vec::new();
+        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "second line must restart at low, got {:?}", &text[..text.len().min(200)]);
+        assert!(!text.contains("\x1b[38;2;160;160;160m"), "no global-index bleed");
     }
 
     #[test]

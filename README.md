@@ -57,7 +57,8 @@ are saved automatically when you close the panel or quit.
 `text` renders the current lyric line (or the static `text`) in big
 block letters, each letter lit by its own frequency bin exactly like
 the bars: bin value drives letter brightness the way it drives bar
-height, no auto-gain. Glyph rows scale to your terminal's cell
+height, no auto-gain. Each line runs its own gradient from
+`gradient_low` (left) to `gradient_high` (right). Glyph rows scale to your terminal's cell
 aspect (read from the window pixel size, classic 1:2 assumed when
 unknown) so letters stay proportioned on square-ish fonts. If they
 still look squashed, force it with `row_scale` (panel row, 0 = auto,
