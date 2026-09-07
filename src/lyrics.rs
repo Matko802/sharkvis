@@ -1153,7 +1153,7 @@ impl LyricWorker {
 
     pub fn display_lines(&self, track: &Track, _static_text: &str) -> Vec<(String, bool)> {
         if !track.present || self.lines.is_empty() {
-            return vec![(String::new(), true)];
+            return vec![("No Lyrics".to_string(), false)];
         }
         let pos = self.cur_pos(track);
         let mut current: Option<String> = None;
@@ -1170,7 +1170,7 @@ impl LyricWorker {
 
     pub fn display_context(&self, track: &Track, _static_text: &str) -> Vec<(String, bool)> {
         if !track.present || self.lines.is_empty() {
-            return vec![(String::new(), true)];
+            return vec![("No Lyrics".to_string(), false)];
         }
         let pos = self.cur_pos(track);
         let mut idx: Option<usize> = None;
@@ -1358,24 +1358,39 @@ mod worker_tests {
     }
 
     #[test]
-    fn blank_without_lines() {
+    fn no_lyrics_without_lines() {
         let w = worker_with(vec![]);
-        assert_eq!(w.display_lines(&track_at(3.0), "STATIC"), vec![(String::new(), true)]);
+        assert_eq!(
+            w.display_lines(&track_at(3.0), "STATIC"),
+            vec![("No Lyrics".to_string(), false)]
+        );
         let mut no_track = track_at(0.0);
         no_track.present = false;
-        assert_eq!(w.display_lines(&no_track, "STATIC"), vec![(String::new(), true)]);
-        assert_eq!(w.display_context(&track_at(3.0), "STATIC"), vec![(String::new(), true)]);
+        assert_eq!(
+            w.display_lines(&no_track, "STATIC"),
+            vec![("No Lyrics".to_string(), false)]
+        );
+        assert_eq!(
+            w.display_context(&track_at(3.0), "STATIC"),
+            vec![("No Lyrics".to_string(), false)]
+        );
     }
 
     #[test]
-    fn blank_when_track_not_present() {
+    fn no_lyrics_when_track_not_present() {
         let w = worker_with(vec![
             LyricLine { t: 10.0, text: "old song".to_string(), words: Vec::new() },
         ]);
         let mut gone = track_at(50.0);
         gone.present = false;
-        assert_eq!(w.display_lines(&gone, "STATIC"), vec![(String::new(), true)]);
-        assert_eq!(w.display_context(&gone, "STATIC"), vec![(String::new(), true)]);
+        assert_eq!(
+            w.display_lines(&gone, "STATIC"),
+            vec![("No Lyrics".to_string(), false)]
+        );
+        assert_eq!(
+            w.display_context(&gone, "STATIC"),
+            vec![("No Lyrics".to_string(), false)]
+        );
     }
 
     #[test]

@@ -72,7 +72,8 @@ next lines above and below forced grey while the current line stays
 audio-reactive. The left side follows
 the left channel and the right side the right channel. While lyrics
 are being fetched, text mode shows an 8-box cycling ring (hollow
-center) instead of a blank area.
+center) instead of a blank area. Songs with no lyrics anywhere show
+a dimmed `No Lyrics` line instead.
 
 Beyond the built-in chunky Latin set (full ASCII plus smart
 quotes, dashes, `ß`/`æ`/`œ` and friends folded in), any other
