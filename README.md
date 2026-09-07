@@ -100,7 +100,10 @@ duration-scored search), [Musixmatch](https://www.musixmatch.com) (anonymous
 token, no account needed — true word-level Richsync timing when
 available), then YouTube auto-captions via `yt-dlp`
 (from the player URL, else a duration-guarded search).
-Results cache per track in `~/.cache/sharkvis/lyrics/`. `players`
+Results cache per track in `~/.cache/sharkvis/lyrics/`. Tracks with
+no lyrics anywhere are remembered for 7 days (no spinner, no
+refetch); `r` forces a fresh check. The loading ring only appears
+while genuinely waiting, never as a flash for instant hits. `players`
 whitelists MPRIS players (first playing match wins, `playerctld`
 preferred); empty means any. `provider` defaults to `auto`, which
 queries lrclib exact, Musixmatch and lrclib search, then

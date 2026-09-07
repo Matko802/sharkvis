@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::mpris::{cmd_out, Track};
 
@@ -587,6 +588,33 @@ fn cache_path(key: &str) -> Option<String> {
     Some(format!("{}/.cache/sharkvis/lyrics/{}.lrc", home.to_string_lossy(), name))
 }
 
+const DEAD_TTL_SECS: u64 = 7 * 24 * 3600;
+const LOAD_GRACE_MS: u128 = 1500;
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn dead_path(cache_path: &str) -> String {
+    format!("{}.none", cache_path)
+}
+
+fn dead_fresh(path: &str) -> bool {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let when: u64 = match text.trim().parse() {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    when.saturating_add(DEAD_TTL_SECS) > now_secs()
+}
+
+fn mark_dead(path: &str) {
+    let _ = std::fs::write(path, now_secs().to_string());
+}
+
 fn dedup_rolling(lines: Vec<LyricLine>) -> Vec<LyricLine> {
     let norm = |s: &str| {
         s.to_ascii_lowercase()
@@ -734,10 +762,17 @@ fn quality_bonus(lines: &[LyricLine], duration: f64) -> i64 {
     s
 }
 
-fn fetch_auto(artist: &str, title: &str, duration: f64) -> Vec<LyricLine> {
-    let exact = fetch_synced(artist, title).unwrap_or_default();
+fn fetch_auto(artist: &str, title: &str, duration: f64) -> (Vec<LyricLine>, bool) {
+    let mut contacted = false;
+    let exact = match fetch_synced(artist, title) {
+        Some(lines) => {
+            contacted = true;
+            lines
+        }
+        None => Vec::new(),
+    };
     if !exact.is_empty() && 100 + quality_bonus(&exact, duration) >= 160 {
-        return exact;
+        return (exact, true);
     }
     let mut best_score = if exact.is_empty() {
         -10000i64
@@ -750,18 +785,20 @@ fn fetch_auto(artist: &str, title: &str, duration: f64) -> Vec<LyricLine> {
         (60, fetch_search_synced(artist, title, duration)),
     ];
     for (base, hit) in cands {
-        if let Some(lines) = hit {
-            if lines.is_empty() {
-                continue;
-            }
-            let s = base + quality_bonus(&lines, duration);
-            if s > best_score {
-                best_score = s;
-                best = lines;
-            }
+        let Some(lines) = hit else {
+            continue;
+        };
+        contacted = true;
+        if lines.is_empty() {
+            continue;
+        }
+        let s = base + quality_bonus(&lines, duration);
+        if s > best_score {
+            best_score = s;
+            best = lines;
         }
     }
-    best
+    (best, contacted)
 }
 
 fn fetch_lyrics(
@@ -771,19 +808,21 @@ fn fetch_lyrics(
     duration: f64,
     cache_path: &str,
     opts: &FetchOpts,
-) -> Vec<LyricLine> {
+) -> (Vec<LyricLine>, bool) {
     if !opts.local_folder.trim().is_empty() {
         if let Some(lines) = scan_local_lrc(&opts.local_folder, artist, title) {
             if !lines.is_empty() {
-                return lines;
+                return (lines, true);
             }
         }
     }
+    let mut contacted = false;
     if opts.provider == "auto" {
-        let lines = fetch_auto(artist, title, duration);
+        let (lines, ok) = fetch_auto(artist, title, duration);
         if !lines.is_empty() {
-            return lines;
+            return (lines, true);
         }
+        contacted = ok;
     } else {
         for name in provider_order(&opts.provider) {
             let hit = match name {
@@ -791,14 +830,17 @@ fn fetch_lyrics(
                 _ => {
                     let synced = fetch_synced(artist, title).unwrap_or_default();
                     if !synced.is_empty() {
-                        return synced;
+                        return (synced, true);
                     }
                     fetch_search_synced(artist, title, duration)
                 }
             };
+            if hit.is_some() {
+                contacted = true;
+            }
             if let Some(lines) = hit {
                 if !lines.is_empty() {
-                    return lines;
+                    return (lines, true);
                 }
             }
         }
@@ -806,21 +848,21 @@ fn fetch_lyrics(
     if !url.is_empty() {
         let subs = fetch_subs(url, cache_path);
         if !subs.is_empty() {
-            return subs;
+            return (subs, true);
         }
     }
     if !artist.trim().is_empty() && !title.trim().is_empty() {
         let subs = fetch_search_subs(artist, title, duration, cache_path);
         if !subs.is_empty() {
-            return subs;
+            return (subs, true);
         }
         if let Some(lines) = fetch_search_plain(artist, title, duration) {
             if !lines.is_empty() {
-                return lines;
+                return (lines, true);
             }
         }
     }
-    Vec::new()
+    (Vec::new(), contacted)
 }
 
 fn fetch_search_synced(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
@@ -872,6 +914,7 @@ pub struct LyricWorker {
     lines: Vec<LyricLine>,
     rx: Option<std::sync::mpsc::Receiver<(String, Vec<LyricLine>)>>,
     last_attempt: Option<Instant>,
+    dead: HashSet<String>,
     last_pos: f64,
     pos_prev: (f64, Instant),
     pos_cur: (f64, Instant),
@@ -890,6 +933,7 @@ impl LyricWorker {
             lines: Vec::new(),
             rx: None,
             last_attempt: None,
+            dead: HashSet::new(),
             last_pos: 0.0,
             pos_prev: (0.0, now),
             pos_cur: (0.0, now),
@@ -933,9 +977,11 @@ impl LyricWorker {
     pub fn force_reload(&mut self) {        self.lines.clear();
         self.rx = None;
         self.last_attempt = None;
+        self.dead.remove(&self.key);
         if !self.key.is_empty() {
             if let Some(p) = cache_path(&self.key) {
                 let _ = std::fs::remove_file(&p);
+                let _ = std::fs::remove_file(dead_path(&p));
             }
         }
     }
@@ -945,7 +991,13 @@ impl LyricWorker {
     }
 
     pub fn loading(&self) -> bool {
-        self.rx.is_some() && self.lines.is_empty()
+        if self.rx.is_none() || !self.lines.is_empty() {
+            return false;
+        }
+        match self.last_attempt {
+            Some(t) => t.elapsed().as_millis() > LOAD_GRACE_MS,
+            None => false,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -953,6 +1005,7 @@ impl LyricWorker {
         self.lines.clear();
         self.rx = None;
         self.last_attempt = None;
+        self.dead.clear();
         self.frozen = None;
     }
 
@@ -999,6 +1052,9 @@ impl LyricWorker {
             match rx.try_recv() {
                 Ok((k, lines)) => {
                     self.rx = None;
+                    if lines.is_empty() {
+                        self.dead.insert(k.clone());
+                    }
                     if k == self.key {
                         self.lines = lines;
                     }
@@ -1053,19 +1109,33 @@ impl LyricWorker {
                 let _ = std::fs::remove_file(&path);
             }
         }
+        if self.manual.is_none() {
+            if self.dead.contains(&key) {
+                return;
+            }
+            let dpath = dead_path(&path);
+            if dead_fresh(&dpath) {
+                self.dead.insert(key.clone());
+                return;
+            }
+            let _ = std::fs::remove_file(&dpath);
+        }
         self.last_attempt = Some(Instant::now());
         let url = track.url.clone();
         let duration = track.duration;
         let opts = opts.clone();
+        let dpath = dead_path(&path);
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let lines = fetch_lyrics(&artist, &title, &url, duration, &path, &opts);
+            let (lines, contacted) = fetch_lyrics(&artist, &title, &url, duration, &path, &opts);
             if !lines.is_empty() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
                 let _ = std::fs::write(&path, serialize_lrc(&lines));
+            } else if contacted {
+                mark_dead(&dpath);
             }
             let _ = tx.send((key, lines));
         });
@@ -1241,6 +1311,7 @@ mod worker_tests {
             lines,
             rx: None,
             last_attempt: None,
+            dead: HashSet::new(),
             last_pos: 0.0,
             pos_prev: (0.0, now),
             pos_cur: (0.0, now),
@@ -1353,9 +1424,45 @@ mod worker_tests {
         assert!(!w.loading());
         let (_tx, rx) = std::sync::mpsc::channel();
         w.rx = Some(rx);
+        w.last_attempt = Some(Instant::now());
+        assert!(!w.loading(), "grace period hides instant hits");
+        w.last_attempt = Some(Instant::now() - Duration::from_secs(2));
         assert!(w.loading());
         w.lines = vec![LyricLine { t: 1.0, text: "x".to_string(), words: Vec::new() }];
         assert!(!w.loading());
+    }
+
+    #[test]
+    fn dead_tracks_skip_respawn() {
+        let mut w = worker_with(vec![]);
+        w.dead.insert("a|b".to_string());
+        w.last_attempt = Some(Instant::now() - Duration::from_secs(61));
+        w.update_meta(&track_at(1.0), &FetchOpts::default());
+        assert!(w.rx.is_none(), "known-dead tracks must not refetch");
+        assert!(w.lines.is_empty());
+    }
+
+    #[test]
+    fn force_reload_clears_dead() {
+        let mut w = worker_with(vec![]);
+        w.dead.insert("a|b".to_string());
+        w.force_reload();
+        assert!(!w.dead.contains("a|b"));
+    }
+
+    #[test]
+    fn dead_marker_round_trip_and_expiry() {
+        let dir = std::env::temp_dir().join(format!("sharkvis-deadtest-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dead_path(&dir.join("x.lrc").to_string_lossy());
+        assert!(!dead_fresh(&p));
+        mark_dead(&p);
+        assert!(dead_fresh(&p));
+        std::fs::write(&p, "bogus").unwrap();
+        assert!(!dead_fresh(&p));
+        std::fs::write(&p, (now_secs().saturating_sub(DEAD_TTL_SECS + 10)).to_string()).unwrap();
+        assert!(!dead_fresh(&p));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1472,7 +1579,8 @@ mod plain_tests {
 #[cfg(test)]
 mod interp_tests {
     use super::LyricWorker;
-    use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn extrapolates_playback() {
