@@ -772,11 +772,7 @@ fn main() {
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;
-        rnd.yscale = if cfg.row_scale == 0 {
-            auto_yscale
-        } else {
-            cfg.row_scale.min(4) as usize
-        };
+        rnd.yscale = auto_yscale;
         rnd.text_small = cfg.text_style == "normal";
         rnd.loading = cfg.text_source == "lyrics" && lyric.loading();
         if cfg.provider != last_provider {

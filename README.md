@@ -60,9 +60,7 @@ the bars: bin value drives letter brightness the way it drives bar
 height, no auto-gain. Each line runs its own gradient from
 `gradient_low` (left) to `gradient_high` (right). Glyph rows scale to your terminal's cell
 aspect (read from the window pixel size, classic 1:2 assumed when
-unknown) so letters stay proportioned on square-ish fonts. If they
-still look squashed, force it with `row_scale` (panel row, 0 = auto,
-1 = classic, 2 = square cells, up to 4).
+unknown) so letters stay proportioned on square-ish fonts.
 `text_size` 1-5 scales the letters (`0` = auto
 fit); an explicit size keeps its scale and crops to a window that
 follows the current line when taller than the screen,
