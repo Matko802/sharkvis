@@ -33,6 +33,10 @@ cd sharkvis && git pull && sudo make install
 ```
 ## Usage
 
+<div align="center">
+  <a href="./wiki/Configuration.md"><b>📖 Configuration wiki</b></a>
+</div>
+
 ```sh
 sharkvis
 sharkvis -p config.conf
