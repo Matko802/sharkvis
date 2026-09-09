@@ -13,12 +13,9 @@ Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https:
 ## Features
 
 - PulseAudio / PipeWire support
-- Smoothness adjust, noise reduction
-- Autosensitivity, manual sensitivity control, adjustable cutoff frequencies
-- TUI settings
-- Color customization
-- Pure Rust
-- Uses Musl
+- Autosensitivity, smoothing, adjustable cutoffs
+- Synced lyrics with text mode
+- integrated with [jefetch](https://github.com/Matko802/jefetch)
 
 ## Building
 
@@ -48,132 +45,21 @@ sharkvis -h
 | `q` / `Ctrl-C` | quit |
 
 The config file is looked up in `$SHARKVIS_CONFIG`, then
-`~/.config/sharkvis/config`, then `./config`. Settings changed in the panel
-are saved automatically when you close the panel or quit.
+`~/.config/sharkvis/config`, then `./config`
 
-## Modes
-
-`bars`, `wave`, `oscilloscope`, `text` (switch in the panel with `g`).
-`text` renders the current lyric line (or the static `text`) in big
-block letters, each letter lit by its own frequency bin exactly like
-the bars: bin value drives letter brightness the way it drives bar
-height, no auto-gain. Each line runs its own gradient from
-`gradient_low` (left) to `gradient_high` (right). Glyph rows scale to your terminal's cell
-aspect (read from the window pixel size, classic 1:2 assumed when
-unknown) so letters stay proportioned on square-ish fonts.
-`text_size` 1-5 scales the letters (`0` = auto
-fit); an explicit size keeps its scale and crops to a window that
-follows the current line when taller than the screen,
-`text_style = normal` renders the same line as plain small terminal
-text instead (`big ahh` is the default block letters), pulsing with the overall level, with the previous and
-next lines above and below forced grey while the current line stays
-audio-reactive. The left side follows
-the left channel and the right side the right channel. While lyrics
-are being fetched, text mode shows an 8-box cycling ring (hollow
-center) instead of a blank area. Songs with no lyrics anywhere show
-a dimmed `No Lyrics` line instead.
-
-Beyond the built-in chunky Latin set (full ASCII plus smart
-quotes, dashes, `ß`/`æ`/`œ` and friends folded in), any other
-Unicode script renders via
-embedded GNU Unifont bitmaps (CJK, Hangul, kana, Cyrillic, Greek,
-Arabic presentation forms, …): wide glyphs draw full-height 16px
-tall, narrow ones 8px, mixed lines use the tallest. Common accented
-Latin letters fold to their base letter (`é` → `E`) so Western text
-keeps the uniform look. Small style leans on the terminal itself, so
-it covers everything the terminal font does (CJK counts 2 cells).
-
-```ini
-[visualizer]
-mode = text
-text = SHARKVIS
-text_source = lyrics
-text_size = 1
-text_style = big ahh
-
-[lyrics]
-folder = ~/Music
-
-[mpris]
-players = firefox,spotify
-```
-
-Lyrics sources, in order: local `.lrc` files under `folder` (fuzzy
-matched on artist + title), [lrclib.net](https://lrclib.net) (exact, then
-duration-scored search), [Musixmatch](https://www.musixmatch.com) (anonymous
-token, no account needed — true word-level Richsync timing when
-available), then YouTube auto-captions via `yt-dlp`
-(from the player URL, else a duration-guarded search).
-Results cache per track in `~/.cache/sharkvis/lyrics/`. Tracks with
-no lyrics anywhere are remembered for 7 days (no spinner, no
-refetch); `r` forces a fresh check. The loading ring only appears
-while genuinely waiting, never as a flash for instant hits. `players`
-whitelists MPRIS players (first playing match wins, `playerctld`
-preferred); empty means any. `provider` defaults to `auto`, which
-queries lrclib exact, Musixmatch and lrclib search, then
-picks the best per track: word-level timing and full-track synced
-coverage win, generated even spreads and stub fragments lose. A
-strong lrclib exact hit returns immediately without waiting on the
-slower sources. Set an
-explicit provider to pin first-hit-wins order instead. `p` cycles
-the provider (auto/lrclib/musixmatch).
-
-Text-mode keys (lyrics showing): `s` manual search (`Artist - Title`),
-`l` cycle media player, `r` force lyric reload, `c` left/center align,
-`a` follow on/off, `p` switch provider, `+`/`-` nudge
-sync ±500ms, `0` reset sync.
-
-## Update
-
-Nix flake:
-
-```sh
-cd ~/fish-flake
-nix flake update sharkvis; nh os switch -H machine1
-```
-
-Standalone:
+## Updating
 
 ```sh
 cd sharkvis && git pull && sudo make install
 ```
 
-Restart running copies after updating (`q` to quit, relaunch).
-
-## Live state file (jefetch integration)
-
-While running, sharkvis publishes color, levels and gradients ~20x per
-second to `$XDG_RUNTIME_DIR/sharkvis/state`
-(fallback `/tmp/sharkvis-$UID.state`) so tools like
-[jefetch](https://github.com/Matko802/jefetch) follow instantly, without
-waiting for the settings panel to close:
-
-```text
-color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45
-```
-
-- `color` — gradient color at the current volume (`#rrggbb`)
-- `energy` — overall volume, mean bar height `0..1`
-- `beat` — beat envelope `0..1`: kicks, snares and other onsets lock
-  a tempo grid that keeps pulsing through soft hits, recalibrates on
-  tempo changes, and drops after unsupported bars
-- `bass`, `left`, `right` — bass, left and right channel means `0..1`
-
-Files older than ~1s are stale. Set `SHARKVIS_NO_STATE=1` to disable.
-Note: the monitor sees audio only — no song titles or metadata.
-
 ## Any distro with Nix:
 
-```sh
-nix develop   # drop into a shell with cargo
-make          # build inside the dev shell
-```
-Or
 ```sh
 nix run github:Matko802/sharkvis
 ```
 
-## As a flake input
+### As flake input
 
 ```nix
 {
@@ -191,7 +77,7 @@ nix run github:Matko802/sharkvis
 }
 ```
 
-## As an overlay
+### As overlay
 
 ```nix
 {
@@ -220,19 +106,6 @@ nix run github:Matko802/sharkvis
       };
     };
 }
-```
-
-## Standalone build from source
-
-```sh
-nix build github:Matko802/sharkvis
-nix run github:Matko802/sharkvis
-```
-
-## Develop
-
-```sh
-nix develop github:Matko802/sharkvis
 ```
 
 ## License
