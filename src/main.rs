@@ -232,7 +232,7 @@ fn apply_settings(
     apply_colors(rnd, cfg);
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
-    rnd.set_glyphs(Some(&cfg.glyphs));
+    rnd.set_glyphs(Some(&cfg.chars));
     rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
     rnd.set_offset(x_off);
@@ -413,7 +413,7 @@ fn main() {
     apply_colors(&mut rnd, &cfg);
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
-    rnd.set_glyphs(Some(&cfg.glyphs));
+    rnd.set_glyphs(Some(&cfg.chars));
     rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
     let mut auto_yscale = yscale_for(1);

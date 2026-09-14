@@ -19,7 +19,7 @@ pub const PALETTE: &[(&str, &str)] = &[
     ("black", "000000"),
 ];
 
-pub const DEFAULT_GLYPHS: &[u8] = "\u{2581}\u{2582}\u{2583}\u{2584}\u{2585}\u{2586}\u{2587}\u{2588}".as_bytes();
+pub const DEFAULT_CHARS: &[u8] = "\u{2581}\u{2582}\u{2583}\u{2584}\u{2585}\u{2586}\u{2587}\u{2588}".as_bytes();
 
 #[derive(Clone)]
 pub struct Config {
@@ -48,7 +48,7 @@ pub struct Config {
     pub lyric_offset_ms: i64,
     pub lyrics_folder: String,
     pub mpris_players: String,
-    pub glyphs: Vec<u8>,
+    pub chars: Vec<u8>,
 }
 
 impl Default for Config {
@@ -79,7 +79,7 @@ impl Default for Config {
             lyric_offset_ms: 0,
             lyrics_folder: String::new(),
             mpris_players: String::new(),
-            glyphs: DEFAULT_GLYPHS.to_vec(),
+            chars: DEFAULT_CHARS.to_vec(),
         }
     }
 }
@@ -143,19 +143,19 @@ pub fn config_default_path() -> String {
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        let p = format!("{}/.config/sharkvis/config", home);
+        let p = format!("{}/.config/sharkvis/config.toml", home);
         if Path::new(&p).exists() {
             return p;
         }
-        if Path::new("config").exists() {
-            return "config".to_string();
+        if Path::new("config.toml").exists() {
+            return "config.toml".to_string();
         }
         return p;
     }
-    if Path::new("config").exists() {
-        return "config".to_string();
+    if Path::new("config.toml").exists() {
+        return "config.toml".to_string();
     }
-    "config".to_string()
+    "config.toml".to_string()
 }
 
 fn geti(v: &[u8], def: i64) -> i64 {
@@ -229,7 +229,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
         };
         let key = trim_ascii(&s[..eq]).to_ascii_lowercase();
         let mut val = trim_ascii(&s[eq + 1..]).to_vec();
-        if key.as_slice() != b"glyphs" {
+        if key.as_slice() != b"chars" {
             if let Some(semi) = val.iter().position(|&c| c == b';') {
                 val.truncate(semi);
             }
@@ -353,7 +353,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
                         cfg.lyric_offset_ms = n.clamp(-10000, 10000);
                     }
                 }
-                b"glyphs" => cfg.glyphs = val,
+                b"chars" => cfg.chars = val,
                 _ => {}
             },
             _ => {}
@@ -407,9 +407,9 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("text_style = {}\n", cfg.text_style));
     out.push_str(&format!("provider = {}\n", cfg.provider));
     out.push_str(&format!("offset_ms = {}\n", cfg.lyric_offset_ms));
-    out.push_str("glyphs = ");
+    out.push_str("chars = ");
     let _ = f.write_all(out.as_bytes());
-    let _ = f.write_all(&cfg.glyphs);
+    let _ = f.write_all(&cfg.chars);
     let _ = f.write_all(b"\n");
     let mut tail = String::new();
     tail.push_str("\n[lyrics]\n");

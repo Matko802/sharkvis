@@ -1,4 +1,4 @@
-use crate::config::DEFAULT_GLYPHS;
+use crate::config::DEFAULT_CHARS;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum RenderMode {
@@ -131,7 +131,7 @@ impl Renderer {
     pub fn set_glyphs(&mut self, src: Option<&[u8]>) {
         let src = match src {
             Some(s) if !s.is_empty() => s,
-            _ => DEFAULT_GLYPHS,
+            _ => DEFAULT_CHARS,
         };
         self.glyphs.clear();
         let mut p = 0;

@@ -1,7 +1,7 @@
 # Configuration
 
 Config is looked up in `$SHARKVIS_CONFIG`, then
-`~/.config/sharkvis/config`, then `./config`. Settings changed in the
+`~/.config/sharkvis/config.toml`, then `./config.toml`. Settings changed in the
 panel save automatically when you close it.
 
 ## Example
@@ -33,6 +33,7 @@ gradient_high = ffffff
 
 [visualizer]
 mode = text
+chars = ▁▂▃▄▅▆▇█
 text = SHARKVIS
 text_source = lyrics
 text_align = center
@@ -80,6 +81,7 @@ bar height. Each line runs its own gradient from `gradient_low`
 
 | Key | Notes |
 |-----|-------|
+| `chars` | Bar symbols, low to high (tools like jefetch mimic these with `chars=sharkvis`) |
 | `text` | Static word when `text_source` isn't `lyrics` |
 | `text_source` | `"lyrics"` follows the song, anything else shows `text` |
 | `text_align` | `"left"` or `"center"` |

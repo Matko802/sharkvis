@@ -451,7 +451,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_HIGH => format!("{}", cfg.higher_cutoff),
         S_RATE => format!("{}", cfg.sample_rate),
         S_CH => format!("{}", cfg.channels),
-        S_CHARSET => String::from_utf8_lossy(&cfg.glyphs).into_owned(),
+        S_CHARSET => String::from_utf8_lossy(&cfg.chars).into_owned(),
         S_TEXT => cfg.sptlrx_text.clone(),
         S_TEXTSRC => cfg.text_source.clone(),
         S_TEXTSIZE => {

@@ -49,7 +49,7 @@ sharkvis -h
 | `q` / `Ctrl-C` | quit |
 
 The config file is looked up in `$SHARKVIS_CONFIG`, then
-`~/.config/sharkvis/config`, then `./config`
+`~/.config/sharkvis/config.toml`, then `./config.toml`
 
 ## Updating
 
