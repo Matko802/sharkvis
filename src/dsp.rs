@@ -7,13 +7,17 @@ const FFT_INTERVAL_NS: u64 = 0;
 
 pub struct Dsp {
     pub number_of_bars: usize,
+    #[allow(dead_code)]
     pub rate: u32,
     pub autosens: bool,
     pub sens: f64,
     pub sens_init: bool,
     pub sens_scale: f64,
-    framerate: f64,
-    frame_skip: usize,
+    /// Visual refresh rate (frames/sec) used for time-based smoothing.
+    /// Must be synced from the display loop (`cfg.framerate`); it is
+    /// deliberately independent of the audio sample rate so changing
+    /// `sample_rate` never changes fall speed / smoothness.
+    pub display_fps: f64,
     pub noise_reduction: f64,
 
     fft_size: usize,
@@ -63,8 +67,12 @@ impl Dsp {
         } else if rate > 300000 {
             s *= 64;
         }
-        if s > 4096 {
-            s = 4096;
+        // Keep ~90ms analysis window at high rates too: with the old 4096
+        // cap, 96kHz+ needed far fewer overlapping frames per second than
+        // 48kHz, which read as "less smooth". 8192 is still cheap
+        // (~2x a 4096 FFT) at 60fps.
+        if s > 8192 {
+            s = 8192;
         }
         s
     }
@@ -173,8 +181,7 @@ impl Dsp {
             sens: 100.0,
             sens_init: true,
             sens_scale: 1.0,
-            framerate: 75.0,
-            frame_skip: 1,
+            display_fps: 60.0,
             noise_reduction,
             fft_size,
             input_buffer_size,
@@ -205,32 +212,33 @@ impl Dsp {
             self.input_buffer_size
         };
 
+        // Ingest whatever audio arrived. When the display loop outruns the
+        // audio thread (common at low sample rates where one 512-frame
+        // block spans several 16ms frames) there may be nothing new: keep
+        // the old buffer and still tick the FFT + falloff below so bars
+        // decay at full display rate instead of freezing between blocks.
+        // Refresh/smoothness therefore follow `display_fps`, never `rate`.
         if new_samples > 0 {
-            let ci = match cava_in {
-                Some(s) => s,
-                None => return,
-            };
-            self.framerate -= self.framerate / 64.0;
-            self.framerate += (self.rate as f64 * self.frame_skip as f64) / new_samples as f64 / 64.0;
-            self.frame_skip = 1;
-
-            let size = self.input_buffer_size;
-            let mut i = size;
-            while i > new_samples {
-                i -= 1;
-                self.input_buffer[i] = self.input_buffer[i - new_samples];
-            }
-            self.any_signal = false;
-            for n in 0..new_samples {
-                let v = ci[n];
-                self.input_buffer[new_samples - n - 1] = v;
-                if v != 0.0 {
-                    self.any_signal = true;
+            if let Some(ci) = cava_in {
+                let size = self.input_buffer_size;
+                let mut i = size;
+                while i > new_samples {
+                    i -= 1;
+                    self.input_buffer[i] = self.input_buffer[i - new_samples];
                 }
+                self.any_signal = false;
+                for n in 0..new_samples {
+                    let v = ci[n];
+                    self.input_buffer[new_samples - n - 1] = v;
+                    if v != 0.0 {
+                        self.any_signal = true;
+                    }
+                }
+            } else {
+                self.any_signal = false;
             }
         } else {
-            self.frame_skip += 1;
-            return;
+            self.any_signal = false;
         }
 
         match self.last_fft {
@@ -260,8 +268,11 @@ impl Dsp {
         }
 
         let mut overshoot = false;
+        // Time-based falloff: driven by the display rate, not by the audio
+        // sample rate, so `sample_rate` never changes fall speed.
+        let fps = self.display_fps.clamp(1.0, 1000.0);
         let mut gravity_mod =
-            (60.0 / self.framerate).powf(2.5) * 1.54 / self.noise_reduction.max(0.01);
+            (60.0 / fps).powf(2.5) * 1.54 / self.noise_reduction.max(0.01);
         if gravity_mod < 1.0 {
             gravity_mod = 1.0;
         }

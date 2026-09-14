@@ -69,22 +69,27 @@ impl Audio {
 
     pub fn consume(&mut self) -> (usize, Option<&[f64]>, Option<&[f64]>) {
         let sh = &self.shared;
-        let cap = self.left.len() / BLOCK_FRAMES;
-        let mut total = 0usize;
+        let cap = self.left.len();
+        let mut frames = 0usize;
 
         loop {
             let head = sh.head.load(Ordering::Acquire);
             let tail = sh.tail.load(Ordering::Relaxed);
-            if head == tail || total >= cap {
+            if head == tail || frames >= cap {
                 break;
             }
             let slot = tail & sh.mask;
             let n = sh.ring[slot].load(Ordering::Relaxed);
-            if n == usize::MAX {
+            if n == usize::MAX || n > BLOCK_FRAMES {
+                break;
+            }
+            // Blocks are variable-length now (partial flushes); leave the
+            // block queued if it would overflow this frame's buffer.
+            if n > 0 && frames + n > cap {
                 break;
             }
             let b = sh.blocks[slot].lock().unwrap();
-            let base = total * BLOCK_FRAMES;
+            let base = frames;
             let mut j = 0;
             for i in 0..n {
                 self.left[base + i] = b[j];
@@ -94,10 +99,10 @@ impl Audio {
             drop(b);
             let _ = sh.ring[slot].store(usize::MAX, Ordering::Relaxed);
             sh.tail.fetch_add(1, Ordering::Release);
-            total += 1;
+            frames += n;
         }
 
-        let n = total * BLOCK_FRAMES;
+        let n = frames;
         let left = if n > 0 { Some(&self.left[..n]) } else { None };
         let right = if self.channels > 1 && n > 0 {
             Some(&self.right[..n])
@@ -129,6 +134,22 @@ fn dev_name(p: &mut pulse::Pulse, source: &str) -> Option<String> {
     } else {
         Some(source.to_string())
     }
+}
+
+fn push_block(shared: &Arc<Shared>, staged: &[f64], staged_cnt: usize) {
+    if staged_cnt == 0 || staged_cnt > BLOCK_FRAMES {
+        return;
+    }
+    let head = shared.head.load(Ordering::Relaxed);
+    let tail = shared.tail.load(Ordering::Acquire);
+    if head - tail < shared.blocks.len() {
+        let slot = head & shared.mask;
+        let mut b = shared.blocks[slot].lock().unwrap();
+        b[..staged_cnt * 2].copy_from_slice(&staged[..staged_cnt * 2]);
+        let _ = shared.ring[slot].store(staged_cnt, Ordering::Relaxed);
+        shared.head.fetch_add(1, Ordering::Release);
+    }
+    // Ring full: drop the newest samples (same policy as before).
 }
 
 fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
@@ -172,42 +193,56 @@ fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
 
     loop {
         match rec.read(&mut raw, &shared.terminate) {
-            Ok(0) => break,
+            Ok(0) => {
+                // Flush any staged tail before exiting so no audio is lost.
+                if staged_cnt > 0 {
+                    push_block(&shared, &staged, staged_cnt);
+                }
+                break;
+            }
             Ok(n) => {
                 let nframes = n / nbytes_per_frame;
-                for f in 0..nframes {
-                    let l = i16::from_le_bytes([
-                        raw[f * nbytes_per_frame],
-                        raw[f * nbytes_per_frame + 1],
-                    ]) as f64
-                        / 32768.0;
-                    let r = if nch >= 2 {
-                        i16::from_le_bytes([
-                            raw[f * nbytes_per_frame + 2],
-                            raw[f * nbytes_per_frame + 3],
+                let mut f = 0;
+                while f < nframes {
+                    // Fill the staging block; push it as soon as it is
+                    // full and keep going so loud/high-rate reads that
+                    // exceed BLOCK_FRAMES are split across blocks instead
+                    // of dropping the tail (old code `break`ed here).
+                    while f < nframes && staged_cnt < BLOCK_FRAMES {
+                        let l = i16::from_le_bytes([
+                            raw[f * nbytes_per_frame],
+                            raw[f * nbytes_per_frame + 1],
                         ]) as f64
-                            / 32768.0
-                    } else {
-                        l
-                    };
-                    if staged_cnt >= BLOCK_FRAMES {
-                        break;
+                            / 32768.0;
+                        let r = if nch >= 2 {
+                            i16::from_le_bytes([
+                                raw[f * nbytes_per_frame + 2],
+                                raw[f * nbytes_per_frame + 3],
+                            ]) as f64
+                                / 32768.0
+                        } else {
+                            l
+                        };
+                        staged[staged_cnt * 2] = l;
+                        staged[staged_cnt * 2 + 1] = r;
+                        staged_cnt += 1;
+                        f += 1;
                     }
-                    staged[staged_cnt * 2] = l;
-                    staged[staged_cnt * 2 + 1] = r;
-                    staged_cnt += 1;
+                    if staged_cnt >= BLOCK_FRAMES {
+                        push_block(&shared, &staged, staged_cnt);
+                        staged_cnt = 0;
+                    }
                 }
 
-                if staged_cnt >= BLOCK_FRAMES {
-                    let head = shared.head.load(Ordering::Relaxed);
-                    let tail = shared.tail.load(Ordering::Acquire);
-                    if head - tail < shared.blocks.len() {
-                        let slot = head & shared.mask;
-                        let mut b = shared.blocks[slot].lock().unwrap();
-                        b.copy_from_slice(&staged);
-                        let _ = shared.ring[slot].store(BLOCK_FRAMES, Ordering::Relaxed);
-                        shared.head.fetch_add(1, Ordering::Release);
-                    }
+                // Push partial blocks immediately instead of waiting for a
+                // full 512 frames. A full block spans 512/rate seconds
+                // (~64ms at 8kHz vs ~10ms at 48kHz); waiting for it made
+                // low sample rates deliver audio in bursts every few
+                // display frames, which collapsed the visual refresh rate
+                // and made motion jumpy. Flushing each read keeps delivery
+                // at the ~5ms Pulse fragment cadence for every rate.
+                if staged_cnt > 0 {
+                    push_block(&shared, &staged, staged_cnt);
                     staged_cnt = 0;
                 }
             }

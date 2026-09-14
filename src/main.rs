@@ -214,6 +214,7 @@ fn apply_settings(
             );
             dsp[ch].sens = saved_sens;
             dsp[ch].sens_init = saved_sens_init;
+            dsp[ch].display_fps = cfg.framerate.max(1) as f64;
         }
     }
 
@@ -377,6 +378,8 @@ fn main() {
             cfg.higher_cutoff,
         ),
     ];
+    dsp[0].display_fps = cfg.framerate.max(1) as f64;
+    dsp[1].display_fps = cfg.framerate.max(1) as f64;
 
     let mut audio = Audio::new(dsp[0].render_frame_size());
     audio.start(&cfg.source, cfg.sample_rate, cfg.channels);
@@ -635,6 +638,7 @@ fn main() {
                     );
                     dsp[ch].sens = saved_sens;
                     dsp[ch].sens_init = saved_sens_init;
+                    dsp[ch].display_fps = cfg.framerate.max(1) as f64;
                 }
                 heights[0] = vec![0.001; bars];
                 heights[1] = vec![0.001; bars];
@@ -660,6 +664,12 @@ fn main() {
         if n > 0 {
             rnd.feed(samples_l, samples_r, n);
         }
+        // Keep smoothing on the display clock: the `framerate` setting can
+        // change without rebuilding the DSP, and it must never depend on
+        // the audio sample rate.
+        let disp_fps = cfg.framerate.max(1) as f64;
+        dsp[0].display_fps = disp_fps;
+        dsp[1].display_fps = disp_fps;
         dsp[0].execute(samples_l, n, &mut heights[0]);
         if cfg.channels > 1 {
             dsp[1].execute(samples_r.or(samples_l), n, &mut heights[1]);
