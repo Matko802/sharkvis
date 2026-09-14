@@ -1503,8 +1503,25 @@ impl Renderer {
         }
     }
 
-    fn emit_row(
-        &mut self,
+    fn glyph_for<'g>(glyphs: &'g [Vec<u8>], gi: i32) -> &'g [u8] {
+        if gi <= 0 || glyphs.is_empty() {
+            return b" ";
+        }
+        let n = glyphs.len() as i32;
+        let mut idx = ((gi - 1) as f64 * (n - 1) as f64 / 7.0 + 0.5) as i32;
+        if idx < 0 {
+            idx = 0;
+        } else if idx >= n {
+            idx = n - 1;
+        }
+        &glyphs[idx as usize]
+    }
+
+    fn emit_row_raw(
+        prev: &mut [u8],
+        cols: usize,
+        row_col: &[u8],
+        glyphs: &[Vec<u8>],
         y: usize,
         x_start: usize,
         region_w: usize,
@@ -1517,12 +1534,12 @@ impl Renderer {
         let mut color_on = false;
         for c in 0..region_w {
             let gi = tgt[c];
-            let idx = y * self.cols + x_start + c;
-            if gi == self.prev[idx] {
+            let idx = y * cols + x_start + c;
+            if gi == prev[idx] {
                 skip += 1;
                 continue;
             }
-            self.prev[idx] = gi;
+            prev[idx] = gi;
             if !wrote {
                 seek_cell(y as u32, (x_start + c) as u32, out);
                 wrote = true;
@@ -1534,14 +1551,30 @@ impl Renderer {
             skip = 0;
             if gi > 0 {
                 if !color_on {
-                    Self::emit_color_state(st, &self.row_col[y], out);
+                    Self::emit_color_state(st, row_col, out);
                     color_on = true;
                 }
-                out.s(self.render_glyph(gi as i32));
+                out.s(Self::glyph_for(glyphs, gi as i32));
             } else {
                 out.s(b" ");
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn emit_row(
+        &mut self,
+        y: usize,
+        x_start: usize,
+        region_w: usize,
+        tgt: &[u8],
+        st: &mut ColorState,
+        out: &mut Out,
+    ) {
+        let cols = self.cols;
+        let (prev, row_col, glyphs) =
+            (&mut self.prev, &self.row_col[y], &self.glyphs);
+        Self::emit_row_raw(prev, cols, row_col, glyphs, y, x_start, region_w, tgt, st, out);
     }
 
     fn draw_wave(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
@@ -1627,6 +1660,7 @@ impl Renderer {
         let uy0 = cy0.min(self.db_y0);
         let uy1 = cy1.max(self.db_y1);
         if uy1 >= uy0 {
+            let cols = self.cols;
             for y in uy0..=uy1 {
                 for c in 0..ncol {
                     self.rowbuf[c] =
@@ -1636,8 +1670,16 @@ impl Renderer {
                             0
                         };
                 }
-                let row = self.rowbuf[..ncol].to_vec();
-                self.emit_row(y, x_start, ncol, &row, &mut st, out);
+                // Borrow disjoint fields directly: no per-row Vec alloc.
+                // (The old `to_vec()` here allocated ~rows times per frame,
+                // allocator churn on the 60fps wave path.)
+                let (prev, rowbuf, row_col, glyphs) = (
+                    &mut self.prev,
+                    &self.rowbuf[..ncol],
+                    &self.row_col[y],
+                    &self.glyphs,
+                );
+                Self::emit_row_raw(prev, cols, row_col, glyphs, y, x_start, ncol, rowbuf, &mut st, out);
             }
         }
         self.db_y0 = cy0;
@@ -1757,12 +1799,18 @@ impl Renderer {
         let uy0 = cy0.min(self.db_y0);
         let uy1 = cy1.max(self.db_y1);
         if ux1 >= ux0 && uy1 >= uy0 {
+            let w = ux1 - ux0 + 1;
             for y in uy0..=uy1 {
                 for x in ux0..=ux1 {
                     self.rowbuf[x - ux0] = if self.osc_glow[y * cols + x] != 0 { 8 } else { 0 };
                 }
-                let row = self.rowbuf[..(ux1 - ux0 + 1)].to_vec();
-                self.emit_row(y, ux0, ux1 - ux0 + 1, &row, &mut st, out);
+                let (prev, rowbuf, row_col, glyphs) = (
+                    &mut self.prev,
+                    &self.rowbuf[..w],
+                    &self.row_col[y],
+                    &self.glyphs,
+                );
+                Self::emit_row_raw(prev, cols, row_col, glyphs, y, ux0, w, rowbuf, &mut st, out);
             }
         }
         self.db_x0 = cx0;

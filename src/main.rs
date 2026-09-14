@@ -724,57 +724,71 @@ fn main() {
             live.update(energy, bass, left, right, cv(lo), cv(hi));
         }
 
-        if last_track_poll.elapsed() >= Duration::from_millis(2000) {
-            last_track_poll = Instant::now();
-            let allow: Vec<String> = cfg
-                .mpris_players
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            let fresh = match manual_player.clone() {
-                Some(m) => {
-                    let t = poll_named(&m);
-                    if t.present {
-                        t
-                    } else {
-                        manual_player = None;
-                        poll_track(&allow)
+        // MPRIS (playerctl subprocesses) + lyric fetching block the render
+        // thread for milliseconds per call. In wave/bars/oscilloscope modes
+        // nothing on screen uses track/lyrics, so skip all of it there.
+        // Otherwise every position poll (~200ms) and track poll (~2s)
+        // steals time from the 16ms frame budget and shows up as a
+        // periodic micro-stutter in the continuous waveform.
+        let need_lyrics = rnd.mode == RenderMode::Text && cfg.text_source == "lyrics";
+        if need_lyrics {
+            if last_track_poll.elapsed() >= Duration::from_millis(2000) {
+                last_track_poll = Instant::now();
+                let allow: Vec<String> = cfg
+                    .mpris_players
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let fresh = match manual_player.clone() {
+                    Some(m) => {
+                        let t = poll_named(&m);
+                        if t.present {
+                            t
+                        } else {
+                            manual_player = None;
+                            poll_track(&allow)
+                        }
+                    }
+                    None => poll_track(&allow),
+                };
+                if fresh.present {
+                    track = fresh;
+                } else {
+                    track.present = false;
+                    if !crate::mpris::any_active_player() {
+                        lyric.reset();
                     }
                 }
-                None => poll_track(&allow),
-            };
-            if fresh.present {
-                track = fresh;
-            } else {
-                track.present = false;
-                if !crate::mpris::any_active_player() {
-                    lyric.reset();
+            }
+            if last_pos_poll.elapsed() >= Duration::from_millis(200) {
+                last_pos_poll = Instant::now();
+                if track.present && !track.player.is_empty() {
+                    if let Some(pos) = poll_position(&track.player) {
+                        track.position = pos;
+                        lyric.update_pos(pos);
+                    }
                 }
             }
-        }
-        if last_pos_poll.elapsed() >= Duration::from_millis(200) {
+            lyric.update(
+                &track,
+                &FetchOpts {
+                    local_folder: cfg.lyrics_folder.clone(),
+                    provider: cfg.provider.clone(),
+                },
+            );
+        } else {
+            // Keep poll timers from going stale so switching back to text
+            // mode refreshes immediately instead of acting on old data.
+            last_track_poll = Instant::now();
             last_pos_poll = Instant::now();
-            if track.present && !track.player.is_empty() {
-                if let Some(pos) = poll_position(&track.player) {
-                    track.position = pos;
-                    lyric.update_pos(pos);
-                }
-            }
         }
-        lyric.update(
-            &track,
-            &FetchOpts {
-                local_folder: cfg.lyrics_folder.clone(),
-                provider: cfg.provider.clone(),
-            },
-        );
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";
         rnd.text_size = cfg.text_size.min(5) as usize;
         rnd.yscale = auto_yscale;
         rnd.text_small = cfg.text_style == "normal";
-        rnd.loading = cfg.text_source == "lyrics" && lyric.loading();
+        rnd.loading = need_lyrics && lyric.loading();
         if cfg.provider != last_provider {
             last_provider = cfg.provider.clone();
             lyric.poke();
@@ -864,13 +878,21 @@ fn main() {
             }
         }
 
+        let frame_dur = Duration::from_nanos((1_000_000_000u64) / (cfg.framerate as u64).max(1));
         let now = Instant::now();
         if let Some(until) = next.checked_duration_since(now) {
             thread::sleep(until);
+            next = next.checked_add(frame_dur).unwrap_or_else(Instant::now);
+        } else {
+            // Frame overran (slow draw, blocking poll, scheduling hitch):
+            // drop the backlog and schedule the next frame from now.
+            // The old code advanced `next` by exactly one frame, so a
+            // single 200ms stall left `next` far in the past and the loop
+            // then spun with no sleep trying to "catch up" - a burst of
+            // back-to-back draws that looks like a stutter, worst in wave
+            // mode which redraws every frame.
+            next = Instant::now().checked_add(frame_dur).unwrap_or_else(Instant::now);
         }
-        let frame_ns = 1_000_000_000i64 / (cfg.framerate as i64);
-        let next2 = next.checked_add(Duration::from_nanos(frame_ns as u64));
-        next = next2.unwrap_or_else(|| Instant::now());
 
         if g_debug {
             if let Some(dbg) = g_dbg.as_mut() {
