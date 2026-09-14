@@ -67,12 +67,14 @@ impl Dsp {
         } else if rate > 300000 {
             s *= 64;
         }
-        // Keep ~90ms analysis window at high rates too: with the old 4096
-        // cap, 96kHz+ needed far fewer overlapping frames per second than
-        // 48kHz, which read as "less smooth". 8192 is still cheap
-        // (~2x a 4096 FFT) at 60fps.
-        if s > 8192 {
-            s = 8192;
+        // Keep the original table's ~85ms analysis window at high rates
+        // too: capping N while rate keeps growing makes bins coarser in Hz
+        // (23Hz+ at 192kHz), so bands narrower than the main lobe get
+        // sliced differently per rate and bar heights diverge again.
+        // 16384 covers the whole 192kHz setting range; the per-frame cost
+        // (~2x an 8192 FFT) only applies when those rates are selected.
+        if s > 16384 {
+            s = 16384;
         }
         s
     }
@@ -87,6 +89,13 @@ impl Dsp {
     ) -> Self {
         let fft_size = Self::pick_fft_size(rate);
         let input_buffer_size = fft_size;
+        // Nothing can be analyzed above Nyquist; clamp the window so low
+        // sample rates (e.g. 8kHz) with a higher default cutoff (8kHz)
+        // don't pile every top band onto a single bin and underflow the
+        // band math below.
+        let nyquist = (rate / 2).max(2);
+        let high_cut_off = high_cut_off.clamp(2, nyquist);
+        let low_cut_off = low_cut_off.clamp(1, high_cut_off - 1);
         let mut max_bin =
             (high_cut_off as f64 / rate as f64 * fft_size as f64).ceil() as usize;
         if max_bin > fft_size / 2 {
@@ -133,7 +142,8 @@ impl Dsp {
                 if n == bass_cut_off_bar {
                     first_bar = true;
                     if n > 0 {
-                        upper[n - 1] = (relative * half as f64) as usize - 1;
+                        upper[n - 1] = ((relative * half as f64) as usize)
+                            .saturating_sub(1);
                     }
                 } else {
                     first_bar = false;
@@ -145,11 +155,11 @@ impl Dsp {
 
             if n > 0 {
                 if !first_bar {
-                    upper[n - 1] = lower[n] - 1;
+                    upper[n - 1] = lower[n].saturating_sub(1);
                     if lower[n] <= lower[n - 1] {
                         if lower[n - 1] + 1 < half + 1 {
                             lower[n] = lower[n - 1] + 1;
-                            upper[n - 1] = lower[n] - 1;
+                            upper[n - 1] = lower[n].saturating_sub(1);
                         }
                     }
                 } else if upper[n - 1] < lower[n - 1] {
@@ -164,8 +174,18 @@ impl Dsp {
         for n in 0..number_of_bars {
             eq[n] = 1.0 / 2.0f64.powf(28.0);
             eq[n] *= cut_freq[n + 1].powf(0.85);
-            eq[n] /= (fft_size as f64).log2();
-            eq[n] /= (upper[n] - lower[n] + 1) as f64;
+            // Gain calibration, independent of sample rate: FFT magnitudes
+            // grow linearly with N (coherent gain) while a fixed-Hz band
+            // spans N/rate bins, so without correction a taller FFT reads
+            // louder and `sample_rate` would change bar heights. The
+            // 48000/rate factor cancels the N/rate bin-count growth and the
+            // /12 pins the old /log2(N) at log2(4096), so 48kHz output is
+            // bit-identical to before while every other rate now matches
+            // it: same Hz tone at same amplitude gives same bars at any
+            // rate.
+            eq[n] /= 12.0;
+            eq[n] /= (upper[n].saturating_sub(lower[n]) + 1) as f64;
+            eq[n] *= 48000.0 / rate as f64;
         }
 
         let mut multiplier = vec![0.0f64; fft_size];
@@ -327,6 +347,87 @@ impl Dsp {
         if self.sens_scale != 1.0 {
             for n in 0..self.number_of_bars {
                 cava_out[n] *= self.sens_scale;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sine_response(rate: u32, freq: f64, amp: f64) -> Vec<f64> {
+        let bars = 32;
+        let mut dsp = Dsp::new(bars, rate, false, 0.2, 50, 8000);
+        dsp.display_fps = 60.0;
+        let n = dsp.render_frame_size();
+        let mut out = vec![0.0; bars];
+        // Feed a continuous sine in chunks until the input buffer holds
+        // only the tone and everything has settled to steady state. The
+        // falloff in leakage bands needs ~35 ticks after the fill to
+        // finish, so settle generously (steady-state proof, not speed).
+        let chunk = 512.min(n);
+        let ticks = n / chunk + 40;
+        let mut buf = vec![0.0; chunk];
+        let mut idx = 0usize;
+        for _ in 0..ticks {
+            for i in 0..chunk {
+                buf[i] =
+                    amp * (2.0 * std::f64::consts::PI * freq * idx as f64 / rate as f64).sin();
+                idx += 1;
+            }
+            dsp.execute(Some(&buf), chunk, &mut out);
+        }
+        out
+    }
+    fn windowed_peak(out: &[f64]) -> f64 {
+        let pk = out
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let lo = pk.saturating_sub(2);
+        let hi = (pk + 2).min(out.len() - 1);
+        out[lo..=hi].iter().sum()
+    }
+
+    #[test]
+    fn bar_height_independent_of_sample_rate() {
+        // Overall gain calibration: the same Hz tone at the same amplitude
+        // must read the same at every sample rate. (Very low bass bands
+        // are excluded: down there a band is ~1 FFT bin wide, so rounding
+        // a band edge to the nearest bin reshapes those bands per rate no
+        // matter the gain - geometry, not gain.)
+        let rates = [8000u32, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
+        for freq in [220.0, 440.0, 1500.0] {
+            let mut totals = Vec::new();
+            for &r in &rates {
+                let out = sine_response(r, freq, 0.5);
+                let peak = out.iter().cloned().fold(0.0f64, f64::max);
+                assert!(
+                    peak > 1e-9,
+                    "rate {} must show the {}Hz tone, got {:?}",
+                    r,
+                    freq,
+                    out
+                );
+                totals.push(windowed_peak(&out));
+            }
+            let mut sorted = totals.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let med = sorted[sorted.len() / 2];
+            for (r, t) in rates.iter().zip(totals.iter()) {
+                let rel = (t - med).abs() / med;
+                assert!(
+                    rel < 0.25,
+                    "{}Hz tone: rate {} windowed {} vs median {} (rel {:.2})",
+                    freq,
+                    r,
+                    t,
+                    med,
+                    rel
+                );
             }
         }
     }
