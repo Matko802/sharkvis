@@ -9,19 +9,19 @@ pub const CH_DSP: u32 = 1 << 1;
 pub const CH_AUDIO: u32 = 1 << 2;
 pub const CH_EDITOR: u32 = 1 << 3;
 
-const S_BARS: usize = 0;
-const S_BARW: usize = 1;
-const S_SPACING: usize = 2;
-const S_FPS: usize = 3;
-const S_SENS: usize = 4;
-const S_AUTO: usize = 5;
-const S_NOISE: usize = 6;
-const S_LOW: usize = 7;
-const S_HIGH: usize = 8;
-const S_CMODE: usize = 9;
-const S_GHI: usize = 10;
-const S_GLO: usize = 11;
-const S_MODE: usize = 12;
+const S_MODE: usize = 0;
+const S_BARS: usize = 1;
+const S_BARW: usize = 2;
+const S_SPACING: usize = 3;
+const S_FPS: usize = 4;
+const S_SENS: usize = 5;
+const S_AUTO: usize = 6;
+const S_NOISE: usize = 7;
+const S_LOW: usize = 8;
+const S_HIGH: usize = 9;
+const S_CMODE: usize = 10;
+const S_GHI: usize = 11;
+const S_GLO: usize = 12;
 const S_RATE: usize = 13;
 const S_CH: usize = 14;
 const S_CHARSET: usize = 15;
@@ -36,6 +36,7 @@ const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
 const LABELS: [&str; S_COUNT] = [
+    "type",
     "bars",
     "bar width",
     "bar spacing",
@@ -48,7 +49,6 @@ const LABELS: [&str; S_COUNT] = [
     "color mode",
     "color high",
     "color low",
-    "visualizer",
     "sample rate",
     "channels",
     "charset",
@@ -386,6 +386,10 @@ impl SettingsUi {
                 if id == self.sel { Some("\x1b[7m") } else { None },
             );
             y += 1;
+            if id == S_MODE {
+                panel_row(out, cap, y, pw, "_______________", None, None);
+                y += 1;
+            }
         }
         if self.confirm_reset {
             panel_row(out, cap, y, pw, "Are you sure?", Some("press → again"), Some("\x1b[41m\x1b[97m"));
