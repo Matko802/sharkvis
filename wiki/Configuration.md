@@ -129,13 +129,17 @@ per second to `$XDG_RUNTIME_DIR/sharkvis/state` (fallback
 [jefetch](https://github.com/Matko802/jefetch) follow instantly:
 
 ```text
-color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45
+color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45 started=1757917315000 pid=1234
 ```
 
-Files older than ~1s are stale. The file is removed on exit (and stale
-leftovers from crashed runs are dropped at startup), so consumers never
-show frozen colors from a dead instance. Set `SHARKVIS_NO_STATE=1` to
-disable. Note: the monitor sees audio only — no song titles or
+Each instance also writes its own `state-<pid>` file next to it, stamped
+with `started=` (when it was opened) and `pid=`. With several sessions
+running, consumers follow only the newest one and ignore older ones.
+
+Files older than ~1s are stale. Session files are removed on exit (and
+stale leftovers from crashed runs are dropped at startup), so consumers
+never show frozen colors from a dead instance. Set `SHARKVIS_NO_STATE=1`
+to disable. Note: the monitor sees audio only — no song titles or
 metadata.
 
 ## CLI Overrides

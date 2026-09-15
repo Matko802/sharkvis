@@ -4,6 +4,9 @@ const WRITE_EVERY: Duration = Duration::from_millis(50);
 
 pub struct StateWriter {
     path: Option<String>,
+    custom: bool,
+    started_ms: u64,
+    pid: u32,
     last_write: Option<Instant>,
     tracker: BeatTracker,
     last_tick: Option<Instant>,
@@ -12,6 +15,7 @@ pub struct StateWriter {
 
 impl StateWriter {
     pub fn new() -> StateWriter {
+        let custom = custom_state_path().is_some();
         let path = if std::env::var_os("SHARKVIS_NO_STATE").is_some() {
             None
         } else {
@@ -19,6 +23,9 @@ impl StateWriter {
         };
         StateWriter {
             path,
+            custom,
+            started_ms: session_started_ms(),
+            pid: own_pid(),
             last_write: None,
             tracker: BeatTracker::new(),
             last_tick: None,
@@ -61,18 +68,30 @@ impl StateWriter {
         let l = left.clamp(0.0, 1.0);
         let rr = right.clamp(0.0, 1.0);
         let body = format!(
-            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2}\n",
-            r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr
+            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2} started={} pid={}\n",
+            r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr,
+            self.started_ms, self.pid
         );
-        let tmp = format!("{}.tmp", path);
-        if std::fs::write(&tmp, body.as_bytes()).is_ok() {
-            if std::fs::rename(&tmp, &path).is_err() {
-                let _ = std::fs::remove_file(&tmp);
-                self.dir_ready = false;
+        // Per-session file first (what new consumers follow), legacy
+        // singleton second for older consumers. Same body both places.
+        if !self.custom {
+            if let Some(sess) = session_sibling(&path) {
+                write_atomic(&sess, body.as_bytes(), &mut self.dir_ready);
             }
-        } else {
-            self.dir_ready = false;
         }
+        write_atomic(&path, body.as_bytes(), &mut self.dir_ready);
+    }
+}
+
+fn write_atomic(path: &str, body: &[u8], dir_ready: &mut bool) {
+    let tmp = format!("{}.tmp", path);
+    if std::fs::write(&tmp, body).is_ok() {
+        if std::fs::rename(&tmp, path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            *dir_ready = false;
+        }
+    } else {
+        *dir_ready = false;
     }
 }
 
@@ -265,11 +284,15 @@ pub fn lerp_rgb(lo: (u8, u8, u8), hi: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
     (mix(lo.0, hi.0), mix(lo.1, hi.1), mix(lo.2, hi.2))
 }
 
+fn custom_state_path() -> Option<String> {
+    std::env::var("SHARKVIS_STATE")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+}
+
 pub fn state_path() -> String {
-    if let Ok(p) = std::env::var("SHARKVIS_STATE") {
-        if !p.trim().is_empty() {
-            return p;
-        }
+    if let Some(p) = custom_state_path() {
+        return p;
     }
     if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
         if !rt.is_empty() {
@@ -280,11 +303,44 @@ pub fn state_path() -> String {
     format!("/tmp/sharkvis-{}.state", uid)
 }
 
+/// Wall-clock millis when this session started. Published in every state
+/// body as `started=` so consumers with several live sessions can follow
+/// only the newest one and ignore older ones.
+pub fn session_started_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn own_pid() -> u32 {
+    unsafe { libc::getpid() as u32 }
+}
+
+/// Sibling per-session file for a default state path, e.g.
+/// `…/sharkvis/state` → `…/sharkvis/state-<pid>`. Only inside a directory
+/// literally named `sharkvis` (the XDG / /run/user layout) — never in
+/// `/tmp` or next to a custom `SHARKVIS_STATE` file.
+fn session_sibling(state_path: &str) -> Option<String> {
+    let p = std::path::Path::new(state_path);
+    let parent = p.parent()?;
+    let name = parent.file_name()?.to_str()?;
+    if name != "sharkvis" {
+        return None;
+    }
+    Some(format!("{}/state-{}", parent.to_string_lossy(), own_pid()))
+}
+
 fn state_disabled() -> bool {
     std::env::var_os("SHARKVIS_NO_STATE").is_some()
 }
 
-/// Remove the state file, if we own one. Best-effort; called on exit so
+fn remove_with_tmp(path: &str) {
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(format!("{}.tmp", path));
+}
+
+/// Remove our state files, if we own any. Best-effort; called on exit so
 /// consumers (e.g. `jefetch --static`) don't keep showing frozen colors
 /// from a dead instance.
 pub fn clear_state_file() {
@@ -292,26 +348,58 @@ pub fn clear_state_file() {
         return;
     }
     let path = state_path();
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!("{}.tmp", path));
+    // Same pid → same session name, so recomputing finds our file.
+    if custom_state_path().is_none() {
+        if let Some(sess) = session_sibling(&path) {
+            remove_with_tmp(&sess);
+        }
+    }
+    remove_with_tmp(&path);
 }
 
-/// Drop a leftover file from a crashed run. A live producer rewrites
-/// every ~50ms, so anything older than a second can't be live; anything
-/// fresher is left alone so a concurrently running instance is never
-/// disturbed.
+fn file_age(path: &std::path::Path) -> Option<Duration> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+}
+
+/// Drop stale per-session leftovers in `dir`. Fresh files belong to live
+/// instances (concurrent or our own) and are always kept.
+fn sweep_session_dir(dir: &std::path::Path) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("state-") || name.ends_with(".tmp") {
+            continue;
+        }
+        let p = entry.path();
+        if file_age(&p).is_some_and(|a| a > Duration::from_secs(1)) {
+            remove_with_tmp(&p.to_string_lossy());
+        }
+    }
+}
+
+/// Drop leftover files from crashed runs. A live producer rewrites every
+/// ~50ms, so anything older than a second can't be live; anything fresher
+/// is left alone so concurrently running instances are never disturbed.
 pub fn remove_stale_state() {
     if state_disabled() {
         return;
     }
     let path = state_path();
-    let age = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok());
-    if age.is_some_and(|a| a > Duration::from_secs(1)) {
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_file(format!("{}.tmp", path));
+    if file_age(std::path::Path::new(&path)).is_some_and(|a| a > Duration::from_secs(1)) {
+        remove_with_tmp(&path);
+    }
+    if custom_state_path().is_none() {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            if parent.file_name().and_then(|n| n.to_str()) == Some("sharkvis") {
+                sweep_session_dir(parent);
+            }
+        }
     }
 }
 
@@ -683,5 +771,128 @@ mod tests {
         } else {
             std::env::remove_var("SHARKVIS_NO_STATE");
         }
+    }
+
+    fn with_xdg_rt(dir: &str, f: impl FnOnce()) {
+        let _g = env_guard();
+        let prev_rt = std::env::var_os("XDG_RUNTIME_DIR");
+        let prev_state = std::env::var_os("SHARKVIS_STATE");
+        let prev_no = std::env::var_os("SHARKVIS_NO_STATE");
+        std::env::remove_var("SHARKVIS_NO_STATE");
+        std::env::remove_var("SHARKVIS_STATE");
+        std::env::set_var("XDG_RUNTIME_DIR", dir);
+        f();
+        if let Some(v) = prev_rt {
+            std::env::set_var("XDG_RUNTIME_DIR", v);
+        } else {
+            std::env::remove_var("XDG_RUNTIME_DIR");
+        }
+        if let Some(v) = prev_state {
+            std::env::set_var("SHARKVIS_STATE", v);
+        }
+        if let Some(v) = prev_no {
+            std::env::set_var("SHARKVIS_NO_STATE", v);
+        }
+    }
+
+    fn backdate(path: &std::path::Path, secs: u64) {
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+        f.set_modified(old).unwrap();
+    }
+
+    #[test]
+    fn session_sibling_paths() {
+        let pid = own_pid();
+        assert_eq!(
+            session_sibling("/run/user/1000/sharkvis/state"),
+            Some(format!("/run/user/1000/sharkvis/state-{}", pid))
+        );
+        assert_eq!(session_sibling("/tmp/sharkvis-1000.state"), None);
+        assert_eq!(session_sibling("config.toml"), None);
+        assert_eq!(session_sibling("/x/sharkvis/state"), Some(format!("/x/sharkvis/state-{}", pid)));
+    }
+
+    #[test]
+    fn body_carries_session_keys() {
+        let path = std::env::temp_dir().join(format!("sharkvis-sess-{}", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        with_state_path(&path, || {
+            let mut w = StateWriter::new();
+            assert!(w.custom, "override is a custom path");
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0));
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("started="), "session id published, got {}", text);
+            assert!(text.contains(&format!("pid={}", own_pid())), "got {}", text);
+            let _ = std::fs::remove_file(&path);
+        });
+    }
+
+    #[test]
+    fn default_writes_session_and_legacy() {
+        let rt = std::env::temp_dir().join(format!("fake-rt-{}", std::process::id()));
+        let rt = rt.to_string_lossy().into_owned();
+        with_xdg_rt(&rt, || {
+            let mut w = StateWriter::new();
+            assert!(!w.custom);
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0));
+            let legacy = format!("{}/sharkvis/state", rt);
+            let sess = format!("{}/sharkvis/state-{}", rt, own_pid());
+            let a = std::fs::read_to_string(&legacy).unwrap();
+            let b = std::fs::read_to_string(&sess).unwrap();
+            assert_eq!(a, b, "same body both places");
+            assert!(a.contains("started="), "got {}", a);
+            let _ = std::fs::remove_file(&legacy);
+            let _ = std::fs::remove_file(&sess);
+            let _ = std::fs::remove_dir(format!("{}/sharkvis", rt));
+            let _ = std::fs::remove_dir(&rt);
+        });
+    }
+
+    #[test]
+    fn sweep_keeps_fresh_sessions() {
+        let dir = std::env::temp_dir().join(format!("sweep-{}", std::process::id()));
+        let dir = dir.join("sharkvis");
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("state-111");
+        let fresh = dir.join("state-222");
+        let bare = dir.join("state");
+        let other = dir.join("notes.txt");
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(format!("{}.tmp", old.display()), "x").unwrap();
+        std::fs::write(&fresh, "x").unwrap();
+        std::fs::write(&bare, "x").unwrap();
+        std::fs::write(&other, "x").unwrap();
+        backdate(&old, 30);
+        backdate(&bare, 30);
+        sweep_session_dir(&dir);
+        assert!(!old.exists(), "stale session removed");
+        assert!(!std::path::Path::new(&format!("{}.tmp", old.display())).exists());
+        assert!(fresh.exists(), "live session kept");
+        assert!(bare.exists(), "bare legacy file is not sweep's job");
+        assert!(other.exists(), "unrelated files kept");
+        let _ = std::fs::remove_file(&fresh);
+        let _ = std::fs::remove_file(&bare);
+        let _ = std::fs::remove_file(&other);
+        let _ = std::fs::remove_dir(&dir);
+        let _ = std::fs::remove_dir(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn clear_removes_session_too() {
+        let rt = std::env::temp_dir().join(format!("fake-rt2-{}", std::process::id()));
+        let rt = rt.to_string_lossy().into_owned();
+        with_xdg_rt(&rt, || {
+            let legacy = format!("{}/sharkvis/state", rt);
+            let sess = format!("{}/sharkvis/state-{}", rt, own_pid());
+            std::fs::create_dir_all(format!("{}/sharkvis", rt)).unwrap();
+            std::fs::write(&legacy, "x").unwrap();
+            std::fs::write(&sess, "x").unwrap();
+            clear_state_file();
+            assert!(!std::path::Path::new(&legacy).exists());
+            assert!(!std::path::Path::new(&sess).exists());
+            let _ = std::fs::remove_dir(format!("{}/sharkvis", rt));
+            let _ = std::fs::remove_dir(&rt);
+        });
     }
 }
