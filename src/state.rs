@@ -280,9 +280,53 @@ pub fn state_path() -> String {
     format!("/tmp/sharkvis-{}.state", uid)
 }
 
+fn state_disabled() -> bool {
+    std::env::var_os("SHARKVIS_NO_STATE").is_some()
+}
+
+/// Remove the state file, if we own one. Best-effort; called on exit so
+/// consumers (e.g. `jefetch --static`) don't keep showing frozen colors
+/// from a dead instance.
+pub fn clear_state_file() {
+    if state_disabled() {
+        return;
+    }
+    let path = state_path();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}.tmp", path));
+}
+
+/// Drop a leftover file from a crashed run. A live producer rewrites
+/// every ~50ms, so anything older than a second can't be live; anything
+/// fresher is left alone so a concurrently running instance is never
+/// disturbed.
+pub fn remove_stale_state() {
+    if state_disabled() {
+        return;
+    }
+    let path = state_path();
+    let age = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok());
+    if age.is_some_and(|a| a > Duration::from_secs(1)) {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}.tmp", path));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These tests mutate process env (SHARKVIS_STATE / SHARKVIS_NO_STATE),
+    // which is process-global: serialize them so parallel tests can't
+    // clobber each other's vars mid-assertion.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn beat_fires_on_repeating_kicks() {
@@ -530,6 +574,7 @@ mod tests {
 
     #[test]
     fn state_path_override() {
+        let _g = env_guard();
         std::env::set_var("SHARKVIS_STATE", "/tmp/test-sharkvis-state");
         assert_eq!(state_path(), "/tmp/test-sharkvis-state");
         std::env::remove_var("SHARKVIS_STATE");
@@ -538,6 +583,7 @@ mod tests {
 
     #[test]
     fn disabled_writer_is_noop() {
+        let _g = env_guard();
         std::env::set_var("SHARKVIS_NO_STATE", "1");
         let mut w = StateWriter::new();
         assert!(w.path.is_none());
@@ -566,5 +612,76 @@ mod tests {
             "no temp leftovers"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn with_state_path(path: &str, f: impl FnOnce()) {
+        let _g = env_guard();
+        let prev_state = std::env::var_os("SHARKVIS_STATE");
+        let prev_no = std::env::var_os("SHARKVIS_NO_STATE");
+        std::env::remove_var("SHARKVIS_NO_STATE");
+        std::env::set_var("SHARKVIS_STATE", path);
+        f();
+        if let Some(v) = prev_state {
+            std::env::set_var("SHARKVIS_STATE", v);
+        } else {
+            std::env::remove_var("SHARKVIS_STATE");
+        }
+        if let Some(v) = prev_no {
+            std::env::set_var("SHARKVIS_NO_STATE", v);
+        }
+    }
+
+    #[test]
+    fn clear_removes_state_and_tmp() {
+        let path = std::env::temp_dir().join(format!("sharkvis-clear-{}", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        with_state_path(&path, || {
+            std::fs::write(&path, "color=#ff0000").unwrap();
+            std::fs::write(format!("{}.tmp", path), "partial").unwrap();
+            clear_state_file();
+            assert!(!std::path::Path::new(&path).exists(), "state file removed on exit");
+            assert!(
+                !std::path::Path::new(&format!("{}.tmp", path)).exists(),
+                "tmp removed on exit"
+            );
+        });
+    }
+
+    #[test]
+    fn stale_cleanup_keeps_fresh_removes_old() {
+        let path = std::env::temp_dir().join(format!("sharkvis-stale-{}", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        with_state_path(&path, || {
+            std::fs::write(&path, "color=#ff0000").unwrap();
+            remove_stale_state();
+            assert!(std::path::Path::new(&path).exists(), "fresh file kept for live instance");
+            let f = std::fs::File::options().write(true).open(&path).unwrap();
+            let old = std::time::SystemTime::now() - std::time::Duration::from_secs(30);
+            f.set_modified(old).unwrap();
+            drop(f);
+            remove_stale_state();
+            assert!(!std::path::Path::new(&path).exists(), "crashed run's file removed");
+        });
+    }
+
+    #[test]
+    fn cleanup_disabled_writer_is_noop() {
+        let _g = env_guard();
+        let path = std::env::temp_dir().join(format!("sharkvis-noop-{}", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        let prev_no = std::env::var_os("SHARKVIS_NO_STATE");
+        std::env::set_var("SHARKVIS_NO_STATE", "1");
+        std::env::set_var("SHARKVIS_STATE", &path);
+        std::fs::write(&path, "color=#ff0000").unwrap();
+        clear_state_file();
+        remove_stale_state();
+        assert!(std::path::Path::new(&path).exists(), "disabled writer touches nothing");
+        let _ = std::fs::remove_file(&path);
+        std::env::remove_var("SHARKVIS_STATE");
+        if let Some(v) = prev_no {
+            std::env::set_var("SHARKVIS_NO_STATE", v);
+        } else {
+            std::env::remove_var("SHARKVIS_NO_STATE");
+        }
     }
 }

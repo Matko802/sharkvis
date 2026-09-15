@@ -132,7 +132,9 @@ per second to `$XDG_RUNTIME_DIR/sharkvis/state` (fallback
 color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45
 ```
 
-Files older than ~1s are stale. Set `SHARKVIS_NO_STATE=1` to
+Files older than ~1s are stale. The file is removed on exit (and stale
+leftovers from crashed runs are dropped at startup), so consumers never
+show frozen colors from a dead instance. Set `SHARKVIS_NO_STATE=1` to
 disable. Note: the monitor sees audio only — no song titles or
 metadata.
 

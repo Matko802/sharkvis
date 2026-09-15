@@ -441,6 +441,9 @@ fn main() {
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
+    // Drop leftovers from a crashed run so consumers never read a dead
+    // instance's colors. Fresh files are kept (concurrent instance).
+    state::remove_stale_state();
 
     let mut rc = 0;
     while !G_SIG.load(Ordering::SeqCst) {
@@ -935,6 +938,11 @@ fn main() {
     term_raw_restore(0);
 
     audio.stop();
+
+    // No live producer anymore: remove the state file so consumers (e.g.
+    // `jefetch --static`) fall back to their own colors instead of showing
+    // our last frozen frame.
+    state::clear_state_file();
 
     std::process::exit(rc);
 }
