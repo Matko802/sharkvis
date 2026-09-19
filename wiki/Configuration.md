@@ -32,10 +32,8 @@ gradient_low = ffffff
 gradient_high = ffffff
 
 [visualizer]
-mode = text
+mode = lyrics
 chars = ▁▂▃▄▅▆▇█
-text = SHARKVIS
-text_source = lyrics
 text_align = center
 text_size = 1
 text_style = big ahh
@@ -70,20 +68,17 @@ players = firefox,spotify
 
 ## Visualizer
 
-`mode` is one of `bars`, `wave`, `oscilloscope`, `text`. Switch it
-live in the panel with `g`.
+`mode` is one of `bars`, `wave`, `oscilloscope`, `lyrics`. Switch it
+live in the panel with `g`. (`text` still works in old configs as an
+alias for `lyrics`.)
 
-`text` renders the current lyric line (or the static `text`) in big
-block letters. Each letter is lit by its own frequency bin exactly
-like the bars: bin value drives letter brightness the way it drives
-bar height. Each line runs its own gradient from `gradient_low`
-(left) to `gradient_high` (right).
+`lyrics` renders the current lyric line in big block letters at a
+fixed brightness — it is not audio-visualized. Each line runs its own
+gradient from `gradient_low` (left) to `gradient_high` (right).
 
 | Key | Notes |
 |-----|-------|
 | `chars` | Bar symbols, low to high (tools like jefetch mimic these with `chars=sharkvis`) |
-| `text` | Static word when `text_source` isn't `lyrics` |
-| `text_source` | `"lyrics"` follows the song, anything else shows `text` |
 | `text_align` | `"left"` or `"center"` |
 | `text_size` | `1`–`5` scales the letters, `0` means auto fit. An explicit size keeps its scale and crops to a window that follows the current line when taller than the screen |
 | `text_style` | `"big ahh"` block letters (default), `"normal"` plain small terminal text with previous/next lines forced grey |
@@ -92,7 +87,7 @@ Anything outside the built-in Latin set renders through embedded GNU
 Unifont bitmaps (CJK, Hangul, kana, Cyrillic, Greek, …). Accented
 Latin folds to its base letter (`é` → `E`).
 
-While lyrics load, text mode shows an 8-box cycling ring. Songs with
+While lyrics load, lyrics mode shows an 8-box cycling ring. Songs with
 no lyrics anywhere show a dimmed `No Lyrics` line instead.
 
 ## Lyrics
@@ -116,7 +111,7 @@ refetch); `r` forces a fresh check.
 | `offset_ms` | Nudge sync, `-10000`–`10000` |
 | `players` | Whitelist MPRIS players, first playing match wins (`playerctld` preferred). Empty means any |
 
-Text-mode keys (lyrics showing): `s` manual search
+Lyrics-mode keys: `s` manual search
 (`Artist - Title`), `l` cycle media player, `r` force lyric reload,
 `c` left/center align, `a` follow on/off, `p` switch provider
 (auto/lrclib/musixmatch), `+`/`-` nudge sync ±500ms, `0` reset sync.

@@ -25,13 +25,11 @@ const S_GLO: usize = 12;
 const S_RATE: usize = 13;
 const S_CH: usize = 14;
 const S_CHARSET: usize = 15;
-const S_TEXT: usize = 16;
-const S_TEXTSRC: usize = 17;
-const S_TEXTSIZE: usize = 18;
-const S_STYLE: usize = 19;
-const S_PROVIDER: usize = 20;
-const S_OFFSET: usize = 21;
-const S_COUNT: usize = 22;
+const S_TEXTSIZE: usize = 16;
+const S_STYLE: usize = 17;
+const S_PROVIDER: usize = 18;
+const S_OFFSET: usize = 19;
+const S_COUNT: usize = 20;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -52,16 +50,14 @@ const LABELS: [&str; S_COUNT] = [
     "sample rate",
     "channels",
     "charset",
-    "text",
-    "text source",
-    "text size",
-    "text style",
+    "lyrics size",
+    "lyrics style",
     "provider",
     "offset ms",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
-const MODES: [&str; 4] = ["bars", "wave", "oscilloscope", "text"];
+const MODES: [&str; 4] = ["bars", "wave", "oscilloscope", "lyrics"];
 
 fn now_ms() -> i64 {
     static REF: OnceLock<Instant> = OnceLock::new();
@@ -190,6 +186,10 @@ impl SettingsUi {
                 *changed |= CH_LAYOUT;
             }
             S_MODE => {
+                // Old "text" mode name maps to "lyrics".
+                if cfg.mode == "text" {
+                    cfg.mode = "lyrics".to_string();
+                }
                 let mut idx = 0;
                 for i in 0..MODES.len() {
                     if cfg.mode == MODES[i] {
@@ -221,17 +221,6 @@ impl SettingsUi {
                 if v != cfg.channels {
                     cfg.channels = v;
                     *changed |= CH_AUDIO;
-                }
-            }
-            S_TEXTSRC => {
-                let v = if cfg.text_source == "lyrics" {
-                    "static".to_string()
-                } else {
-                    "lyrics".to_string()
-                };
-                if v != cfg.text_source {
-                    cfg.text_source = v;
-                    *changed |= CH_LAYOUT;
                 }
             }
             S_PROVIDER => {
@@ -289,10 +278,12 @@ impl SettingsUi {
             "bars" => rows.extend_from_slice(&[
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
-            "text" => rows.extend_from_slice(&[
-                S_TEXT, S_TEXTSRC, S_TEXTSIZE, S_STYLE, S_PROVIDER, S_OFFSET, S_SENS,
-                S_AUTO, S_NOISE, S_LOW, S_HIGH,
-            ]),
+            // Lyrics are not audio-visualized, so no DSP tuning rows here.
+            // "text" is the old mode name, kept so old configs still
+            // show the lyrics rows.
+            "lyrics" | "text" => {
+                rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_PROVIDER, S_OFFSET])
+            }
             _ => {}
         }
         rows.sort_unstable();
@@ -343,7 +334,7 @@ impl SettingsUi {
                 self.clamp_sel(cfg);
             }
             KEY_ENTER => {
-                if self.sel == S_CHARSET || self.sel == S_TEXT {
+                if self.sel == S_CHARSET {
                     *changed |= CH_EDITOR;
                 }
             }
@@ -395,8 +386,6 @@ impl SettingsUi {
             panel_row(out, cap, y, pw, "Are you sure?", Some("press → again"), Some("\x1b[41m\x1b[97m"));
         } else if self.sel == S_CHARSET {
             panel_row(out, cap, y, pw, "edit bar symbols", Some("enter = nano"), None);
-        } else if self.sel == S_TEXT {
-            panel_row(out, cap, y, pw, "edit big text", Some("enter = nano"), None);
         } else {
             panel_row(
                 out,
@@ -456,8 +445,6 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_RATE => format!("{}", cfg.sample_rate),
         S_CH => format!("{}", cfg.channels),
         S_CHARSET => String::from_utf8_lossy(&cfg.chars).into_owned(),
-        S_TEXT => cfg.sptlrx_text.clone(),
-        S_TEXTSRC => cfg.text_source.clone(),
         S_TEXTSIZE => {
             if cfg.text_size == 0 {
                 "auto".to_string()
@@ -547,19 +534,21 @@ mod tests {
     fn visible_rows_per_mode() {
         let bars = SettingsUi::visible_rows("bars");
         assert!(bars.contains(&S_BARS) && bars.contains(&S_CHARSET) && bars.contains(&S_SENS));
-        assert!(!bars.contains(&S_TEXT));
+        assert!(!bars.contains(&S_TEXTSIZE));
         let wave = SettingsUi::visible_rows("wave");
-        assert!(!wave.contains(&S_BARS) && !wave.contains(&S_TEXT) && !wave.contains(&S_SENS));
+        assert!(!wave.contains(&S_BARS) && !wave.contains(&S_TEXTSIZE) && !wave.contains(&S_SENS));
         assert!(wave.contains(&S_MODE) && wave.contains(&S_FPS) && wave.contains(&S_RATE));
         let scope = SettingsUi::visible_rows("oscilloscope");
-        assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXT));
-        let spt = SettingsUi::visible_rows("text");
-        assert!(spt.contains(&S_TEXT) && spt.contains(&S_TEXTSRC) && spt.contains(&S_SENS));
-        assert!(!spt.contains(&S_BARS) && !spt.contains(&S_CHARSET));
+        assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXTSIZE));
+        let lyr = SettingsUi::visible_rows("lyrics");
+        assert!(lyr.contains(&S_TEXTSIZE) && lyr.contains(&S_PROVIDER) && lyr.contains(&S_OFFSET));
+        assert!(!lyr.contains(&S_SENS) && !lyr.contains(&S_BARS) && !lyr.contains(&S_CHARSET));
+        // Old mode name still resolves to the lyrics rows.
+        assert_eq!(SettingsUi::visible_rows("text"), lyr);
         let unknown = SettingsUi::visible_rows("ai");
-        assert!(!unknown.contains(&S_BARS) && !unknown.contains(&S_TEXT));
+        assert!(!unknown.contains(&S_BARS) && !unknown.contains(&S_TEXTSIZE));
         assert!(unknown.contains(&S_MODE) && unknown.contains(&S_FPS));
-        for m in ["bars", "wave", "oscilloscope", "text", "bogus"] {
+        for m in ["bars", "wave", "oscilloscope", "lyrics", "text", "bogus"] {
             let mut v = SettingsUi::visible_rows(m);
             let mut s = v.clone();
             s.sort_unstable();

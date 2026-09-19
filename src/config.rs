@@ -39,8 +39,6 @@ pub struct Config {
     pub gradient_low: String,
     pub gradient_high: String,
     pub mode: String,
-    pub sptlrx_text: String,
-    pub text_source: String,
     pub text_align: String,
     pub text_size: u32,
     pub text_style: String,
@@ -70,8 +68,6 @@ impl Default for Config {
             gradient_low: "ffffff".to_string(),
             gradient_high: "ffffff".to_string(),
             mode: "bars".to_string(),
-            sptlrx_text: "SHARKVIS".to_string(),
-            text_source: "static".to_string(),
             text_align: "center".to_string(),
             text_size: 1,
             text_style: "big ahh".to_string(),
@@ -305,22 +301,17 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             b"visualizer" => match key.as_slice() {
                 b"mode" => {
                     let v = val.as_slice();
-                    if v == b"bars" || v == b"wave" || v == b"oscilloscope" || v == b"lissajous" || v == b"text" {
+                    if v == b"bars" || v == b"wave" || v == b"oscilloscope" || v == b"lissajous" {
                         cfg.mode = String::from_utf8_lossy(v).into_owned();
+                    } else if v == b"lyrics" {
+                        cfg.mode = "lyrics".to_string();
+                    } else if v == b"text" {
+                        // Old name for the lyrics mode.
+                        cfg.mode = "lyrics".to_string();
                     }
                 }
-                b"text" => {
-                    let v = String::from_utf8_lossy(&val).into_owned();
-                    if !v.trim().is_empty() {
-                        cfg.sptlrx_text = v;
-                    }
-                }
-                b"text_source" => {
-                    let v = String::from_utf8_lossy(&val).into_owned();
-                    if v == "lyrics" {
-                        cfg.text_source = v;
-                    }
-                }
+                // Old static-text keys: ignored, lyrics only now.
+                b"text" | b"text_source" => {}
                 b"text_align" => {
                     let v = String::from_utf8_lossy(&val).into_owned();
                     if v == "left" || v == "center" {
@@ -400,8 +391,6 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str(&format!("gradient_high = {}\n", cfg.gradient_high));
     out.push_str("\n[visualizer]\n");
     out.push_str(&format!("mode = {}\n", cfg.mode));
-    out.push_str(&format!("text = {}\n", cfg.sptlrx_text));
-    out.push_str(&format!("text_source = {}\n", cfg.text_source));
     out.push_str(&format!("text_align = {}\n", cfg.text_align));
     out.push_str(&format!("text_size = {}\n", cfg.text_size));
     out.push_str(&format!("text_style = {}\n", cfg.text_style));

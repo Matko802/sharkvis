@@ -14,7 +14,7 @@ Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https:
 
 - PulseAudio / PipeWire support
 - Autosensitivity, smoothing, adjustable cutoffs
-- Synced lyrics with text mode
+- Synced lyrics mode
 - integrated with [jefetch](https://github.com/Matko802/jefetch)
 
 ## Building

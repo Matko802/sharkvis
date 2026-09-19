@@ -5,7 +5,7 @@ pub enum RenderMode {
     Bars,
     Wave,
     Oscilloscope,
-    Text,
+    Lyrics,
 }
 
 enum BigGlyph {
@@ -346,13 +346,16 @@ impl Renderer {
             RenderMode::Wave
         } else if name == "oscilloscope" || name == "lissajous" {
             RenderMode::Oscilloscope
-        } else if name == "text" {
-            RenderMode::Text
+        } else if name == "lyrics" || name == "text" {
+            // "text" is the old name for the lyrics mode, kept as an alias
+            // so existing configs keep working.
+            RenderMode::Lyrics
         } else {
             RenderMode::Bars
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_text(&mut self, s: &str) {
         let v: Vec<char> = s.chars().take(512).collect();
         if self.text != v {
@@ -877,34 +880,6 @@ impl Renderer {
         (1, lines[start..(start + keep).min(lines.len())].to_vec())
     }
 
-    fn char_raw_mags(values: &[f64], right: Option<&[f64]>, m: usize) -> (Vec<f64>, Vec<f64>) {
-        let mut mags_l = vec![0.0f64; m];
-        let mut mags_r = vec![0.0f64; m];
-        for i in 0..m {
-            let avg = |src: &[f64]| -> f64 {
-                if src.is_empty() {
-                    return 0.0;
-                }
-                let n = src.len();
-                let mut b = (i + 1) * n / m;
-                if b <= i * n / m {
-                    b = i * n / m + 1;
-                }
-                if b > n {
-                    b = n;
-                }
-                let s = &src[i * n / m..b];
-                s.iter().sum::<f64>() / s.len() as f64
-            };
-            mags_l[i] = avg(values);
-            mags_r[i] = match right {
-                Some(r) => avg(r),
-                None => mags_l[i],
-            };
-        }
-        (mags_l, mags_r)
-    }
-
     fn spin_frame(elapsed_ms: u128) -> usize {
         (elapsed_ms / 120 % 8) as usize
     }
@@ -993,22 +968,15 @@ impl Renderer {
         }
     }
 
-    fn draw_text_mode(
-        &mut self,
-        values: &[f64],
-        right: Option<&[f64]>,
-        x_start: usize,
-        region_w: usize,
-        out: &mut Out,
-    ) {
+    fn draw_lyrics_mode(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
         if self.loading {
             self.draw_spinner(x_start, region_w, out);
         } else {
             self.spin_t0 = None;
             if self.text_small {
-                self.draw_small_text(values, right, x_start, region_w, out);
+                self.draw_small_text(x_start, region_w, out);
             } else {
-                self.draw_text(values, right, x_start, region_w, out);
+                self.draw_text(x_start, region_w, out);
             }
         }
     }
@@ -1027,14 +995,7 @@ impl Renderer {
         }
     }
 
-    fn draw_small_text(
-        &mut self,
-        values: &[f64],
-        right: Option<&[f64]>,
-        x_start: usize,
-        region_w: usize,
-        out: &mut Out,
-    ) {
+    fn draw_small_text(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
         let rows = self.rows;
         let cols = self.cols;
         if rows == 0 || region_w == 0 {
@@ -1045,16 +1006,11 @@ impl Renderer {
             self.clear_text_region(x_start, region_w, out);
             return;
         }
-        let m = text.len();
-        let (mags_l, mags_r) = Self::char_raw_mags(values, right, m);
-        let mut v = mags_l.iter().chain(mags_r.iter()).cloned().fold(0.0f64, f64::max);
-        if !(v > 0.0) {
-            v = 0.0;
-        } else if v > 1.0 {
-            v = 1.0;
-        }
-        let marker = 64 + (v * 15.0 + 0.5) as u8;
-        let esc = self.letter_color(0.5, v);
+        // Lyrics are intentionally NOT audio-visualized: fixed full
+        // brightness. Only the gradient (left->right) and the greyed
+        // context lines vary.
+        let marker = 79u8;
+        let esc = self.letter_color(0.5, 1.0);
         let grey_esc = if self.color_256 {
             b"\x1b[38;5;240m".to_vec()
         } else {
@@ -1179,14 +1135,7 @@ impl Renderer {
         }
     }
 
-    fn draw_text(
-        &mut self,
-        values: &[f64],
-        right: Option<&[f64]>,
-        x_start: usize,
-        region_w: usize,
-        out: &mut Out,
-    ) {
+    fn draw_text(&mut self, x_start: usize, region_w: usize, out: &mut Out) {
         let rows = self.rows;
         let cols = self.cols;
         if rows == 0 || region_w == 0 {
@@ -1198,7 +1147,6 @@ impl Renderer {
             self.clear_text_region(x_start, region_w, out);
             return;
         }
-        let (mags_l, mags_r) = Self::char_raw_mags(values, right, m);
         let ys = self.yscale.max(1);
         let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size, ys);
         if lines.is_empty() {
@@ -1239,20 +1187,13 @@ impl Renderer {
             } else {
                 region_w.saturating_sub(wline) / 2
             };
-            let mid_x = x_start + lead + wline / 2;
             let mut x0 = x_start + lead;
             for (k, &ci) in line.iter().enumerate() {
                 let (g, w, _) = &gs[k];
-                let dim_f = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
                 let box_w = if k + 1 < line.len() { (w + 1) * s } else { w * s };
-                let left_side = x0 + box_w / 2 <= mid_x;
-                let raw = if left_side { mags_l[ci] } else { mags_r[ci] };
-                let mut v = raw * dim_f;
-                if !(v > 0.0) {
-                    v = 0.0;
-                } else if v > 1.0 {
-                    v = 1.0;
-                }
+                // Not audio-visualized: fixed brightness, dimmed only for
+                // context (non-current) lyric lines.
+                let v = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
                 let marker = 64 + (v * 15.0 + 0.5) as u8;
                 let xfrac = (k as f64 + 0.5) / line.len() as f64;
                 let esc = self.letter_color(xfrac, v);
@@ -1829,7 +1770,7 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Text => self.draw_text_mode(values, None, self.x_off, region, &mut o),
+            RenderMode::Lyrics => self.draw_lyrics_mode(self.x_off, region, &mut o),
             RenderMode::Bars => {
                 self.draw_bars(values, None, self.num_bars, self.num_bars, self.x_off, region, &mut o)
             }
@@ -1841,7 +1782,7 @@ impl Renderer {
         left: &[f64],
         right: &[f64],
         per_ch_l: usize,
-        per_ch_r: usize,
+        _per_ch_r: usize,
         out: &mut Vec<u8>,
         cap: usize,
     ) {
@@ -1854,11 +1795,7 @@ impl Renderer {
         match self.mode {
             RenderMode::Wave => self.draw_wave(self.x_off, region, &mut o),
             RenderMode::Oscilloscope => self.draw_oscilloscope(self.x_off, region, &mut o),
-            RenderMode::Text => {
-                let nl = per_ch_l.min(left.len());
-                let nr = per_ch_r.min(right.len());
-                self.draw_text_mode(&left[..nl], Some(&right[..nr]), self.x_off, region, &mut o)
-            }
+            RenderMode::Lyrics => self.draw_lyrics_mode(self.x_off, region, &mut o),
             RenderMode::Bars => self.draw_bars(
                 left,
                 Some(right),
@@ -1925,8 +1862,10 @@ mod tests {
     }
 
     #[test]
-    fn mode_parses_text() {
-        assert!(Renderer::mode_parse("text") == RenderMode::Text);
+    fn mode_parses_lyrics() {
+        assert!(Renderer::mode_parse("lyrics") == RenderMode::Lyrics);
+        // Old name kept as an alias for existing configs.
+        assert!(Renderer::mode_parse("text") == RenderMode::Lyrics);
         assert!(Renderer::mode_parse("wave") == RenderMode::Wave);
         assert!(Renderer::mode_parse("nope") == RenderMode::Bars);
     }
@@ -1937,27 +1876,27 @@ mod tests {
         r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
-        let vals = vec![1.0; 8];
         let mut out = Vec::new();
-        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out);
         assert!(text.contains('█'), "lit letters must emit full blocks");
         assert!(out.windows(2).any(|w| w == b"\x1b["));
     }
 
     #[test]
-    fn text_stereo_sides() {
+    fn lyrics_ignore_audio_levels() {
+        // Lyrics are not audio-visualized: identical output regardless of
+        // the (now ignored) audio state, at fixed full brightness.
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
-        let left = vec![1.0; 8];
-        let right = vec![0.0; 8];
         let mut out = Vec::new();
-        r.draw_text(&left, Some(&right), 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "loud left side must be bright, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet right side must be dim");
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "first letter at fixed brightness, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;191;191;191m"), "second letter at fixed brightness, got {:?}", &text[..text.len().min(200)]);
+        assert!(!text.contains("19;19;19"), "no audio-driven dimming");
     }
 
     #[test]
@@ -1966,49 +1905,42 @@ mod tests {
         r.set_text("A\nZY");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
-        let vals = vec![1.0; 8];
         let mut out = Vec::new();
-        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("\x1b[38;2;64;64;64m"), "second line must restart at low, got {:?}", &text[..text.len().min(200)]);
         assert!(!text.contains("\x1b[38;2;160;160;160m"), "no global-index bleed");
     }
 
     #[test]
-    fn text_brightness_follows_bins_directly() {
+    fn lyrics_brightness_is_fixed() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
-        let vals = vec![1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
         let mut out = Vec::new();
-        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "loud bins must be bright, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;19;19;19m"), "quiet bins must stay dim like bars");
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "fixed brightness, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;191;191;191m"), "fixed brightness, got {:?}", &text[..text.len().min(200)]);
+        assert!(!text.contains("19;19;19"), "no audio-driven dimming");
     }
 
     #[test]
-    fn text_stereo_ignores_stale_tail() {
+    fn lyrics_stereo_ignores_audio() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
-        r.mode = RenderMode::Text;
+        r.mode = RenderMode::Lyrics;
         r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
-        let mut left = vec![0.001; 64];
-        let mut right = vec![0.001; 64];
-        for v in left.iter_mut().take(4) {
-            *v = 1.0;
-        }
-        for v in right.iter_mut().take(4) {
-            *v = 1.0;
-        }
+        let left = vec![0.001; 64];
+        let right = vec![0.001; 64];
         let mut out = Vec::new();
         r.draw_stereo(&left, &right, 4, 4, &mut out, 1 << 20);
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "left letter must be bright, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;191;191;191m"), "right letter must use fresh bins, got {:?}", &text[..text.len().min(200)]);
-        assert!(!text.contains("19;19;19"), "no letter may fall into the stale tail");
+        assert!(text.contains("\x1b[38;2;64;64;64m"), "left letter fixed bright, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains("\x1b[38;2;191;191;191m"), "right letter fixed bright, got {:?}", &text[..text.len().min(200)]);
+        assert!(!text.contains("19;19;19"), "no audio-driven dimming");
     }
 
     #[test]
@@ -2016,9 +1948,8 @@ mod tests {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("Hi there");
         r.text_small = true;
-        let vals = vec![1.0; 16];
         let mut out = Vec::new();
-        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("Hi there"), "plain line must be emitted, got {:?}", &text[..text.len().min(120)]);
         assert!(!text.contains('█'), "small mode must not use block glyphs");
@@ -2036,13 +1967,12 @@ mod tests {
             ("tomorrow".to_string(), false),
         ]);
         r.text_small = true;
-        let vals = vec![1.0; 16];
         let mut out = Vec::new();
-        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("yesterday") && text.contains("here") && text.contains("tomorrow"), "all three lines must show, got {:?}", &text[..text.len().min(160)]);
         assert!(text.contains("\x1b[38;2;96;96;96m"), "context lines must be forced grey");
-        assert!(text.contains("\x1b[38;2;128;128;128m"), "current line stays reactive");
+        assert!(text.contains("\x1b[38;2;128;128;128m"), "current line fixed full brightness");
     }
 
     #[test]
@@ -2050,12 +1980,11 @@ mod tests {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("");
         r.text_small = true;
-        let vals = vec![1.0; 16];
         let mut out = Vec::new();
-        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(!String::from_utf8_lossy(&out).contains('█'));
         let mut out2 = Vec::new();
-        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out2, cap: 1 << 20 });
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out2, cap: 1 << 20 });
         assert!(out2.is_empty(), "clean region draws nothing");
     }
 
@@ -2092,9 +2021,8 @@ mod tests {
     fn cjk_draws_lit_pixels() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("中文");
-        let vals = vec![1.0; 64];
         let mut out = Vec::new();
-        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains('█'), "CJK fallback must light pixels");
     }
@@ -2120,9 +2048,8 @@ mod tests {
     fn spinner_ring_has_hollow_center() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.loading = true;
-        let vals = vec![0.0; 4];
         let mut out = Vec::new();
-        r.draw_text_mode(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_lyrics_mode(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains('█'), "spinner must draw boxes");
         assert_eq!(r.prev[8 * 80 + 32], 79, "first box active at t=0");
@@ -2134,18 +2061,17 @@ mod tests {
     fn text_empty_text_clears_region() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("");
-        let vals = vec![1.0; 8];
         let mut out = Vec::new();
-        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(!text.contains('█'), "empty text must leave no lit pixels");
         assert!(text.contains(' '), "empty text must wipe stale glyphs");
         let mut out2 = Vec::new();
-        r.draw_text(&vals, None, 0, 80, &mut Out { buf: &mut out2, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out2, cap: 1 << 20 });
         assert!(out2.is_empty(), "clean region draws nothing");
         r.text_small = true;
         let mut out3 = Vec::new();
-        r.draw_small_text(&vals, None, 0, 80, &mut Out { buf: &mut out3, cap: 1 << 20 });
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out3, cap: 1 << 20 });
         assert!(out3.is_empty(), "clean region draws nothing in small mode");
     }
 }
@@ -2272,10 +2198,8 @@ mod probe_tests {
         r.set_text("AB");
         r.grad_lo = 0x000000;
         r.grad_hi = 0xffffff;
-        let left: Vec<f64> = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
-        let right: Vec<f64> = vec![0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1];
         let mut out = Vec::new();
-        r.draw_text(&left, Some(&right), 0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         println!("RAMPS-OUT: {:?}", text);
     }

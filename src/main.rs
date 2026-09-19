@@ -12,6 +12,7 @@ mod lyrics;
 mod mpris;
 mod musixmatch;
 mod pulse;
+mod raw;
 mod render;
 mod settings;
 mod state;
@@ -63,7 +64,8 @@ fn set_handler(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
 }
 
 fn usage() {
-    println!("usage: sharkvis [-p config_file]");
+    println!("usage: sharkvis [-p config_file] [--raw [--bars N] [--fps N] [--raw-mode bars|wave]]");
+    println!("  --raw: print bar levels (0-100, ';'-separated, one line per frame) to stdout");
     println!("  g - settings, q - quit");
 }
 
@@ -234,7 +236,6 @@ fn apply_settings(
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
     rnd.set_glyphs(Some(&cfg.chars));
-    rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
     rnd.set_offset(x_off);
     rnd.clear();
@@ -282,20 +283,19 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.channels > 2 {
         cfg.channels = 2;
     }
-    if cfg.text_source != "lyrics" {
-        cfg.text_source = "static".to_string();
-    }
-    let clean: String = cfg.sptlrx_text.to_ascii_uppercase().chars().take(24).collect();
-    if clean.trim().is_empty() {
-        cfg.sptlrx_text = "SHARKVIS".to_string();
-    } else {
-        cfg.sptlrx_text = clean;
+    // Migrate the old "text" mode name to "lyrics".
+    if cfg.mode == "text" {
+        cfg.mode = "lyrics".to_string();
     }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut cfgpath: Option<String> = None;
+    let mut raw = false;
+    let mut raw_bars: Option<usize> = None;
+    let mut raw_fps: Option<u32> = None;
+    let mut raw_mode: Option<crate::raw::RawMode> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -303,6 +303,27 @@ fn main() {
                 if i + 1 < args.len() {
                     i += 1;
                     cfgpath = Some(args[i].clone());
+                }
+            }
+            "--raw" => {
+                raw = true;
+            }
+            "--bars" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    raw_bars = args[i].parse::<usize>().ok();
+                }
+            }
+            "--fps" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    raw_fps = args[i].parse::<u32>().ok();
+                }
+            }
+            "--raw-mode" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    raw_mode = crate::raw::parse_mode(&args[i]);
                 }
             }
             "-h" | "--help" => {
@@ -346,6 +367,13 @@ fn main() {
     }
 
     clamp_cfg(&mut cfg);
+
+    if raw {
+        let bars = raw_bars.unwrap_or(if cfg.bars > 0 { cfg.bars } else { 48 });
+        let fps = raw_fps.unwrap_or(cfg.framerate.clamp(1, 240));
+        let mode = raw_mode.unwrap_or(crate::raw::RawMode::Bars);
+        std::process::exit(crate::raw::run_raw(&cfg, bars, fps, mode));
+    }
 
     let mut rows = 24u32;
     let mut cols = 80u32;
@@ -417,7 +445,6 @@ fn main() {
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
     rnd.set_glyphs(Some(&cfg.chars));
-    rnd.set_text(&cfg.sptlrx_text.clone());
     rnd.set_wave(cfg.sample_rate);
     let mut auto_yscale = yscale_for(1);
     rnd.yscale = auto_yscale;
@@ -531,7 +558,7 @@ fn main() {
                     if !config_load(&mut cfg, &save_path) {
                         eprintln!("sharkvis: error loading config {}", save_path);
                     }
-                    clamp_cfg(&mut cfg);
+    clamp_cfg(&mut cfg);
                     chmask = CH_LAYOUT | CH_DSP | CH_AUDIO;
                 }
                 if chmask != 0 {
@@ -567,7 +594,7 @@ fn main() {
                 || key == 3
             {
                 break;
-            } else if rnd.mode == RenderMode::Text {
+            } else if rnd.mode == RenderMode::Lyrics {
                 if is_k(key, &cp[..clen], b's') || is_k(key, &cp[..clen], b'S') {
                     search_buf = Some(String::new());
                     force_draw = true;
@@ -743,7 +770,7 @@ fn main() {
         // Otherwise every position poll (~200ms) and track poll (~2s)
         // steals time from the 16ms frame budget and shows up as a
         // periodic micro-stutter in the continuous waveform.
-        let need_lyrics = rnd.mode == RenderMode::Text && cfg.text_source == "lyrics";
+        let need_lyrics = rnd.mode == RenderMode::Lyrics;
         if need_lyrics {
             if last_track_poll.elapsed() >= Duration::from_millis(2000) {
                 last_track_poll = Instant::now();
@@ -791,7 +818,7 @@ fn main() {
                 },
             );
         } else {
-            // Keep poll timers from going stale so switching back to text
+            // Keep poll timers from going stale so switching back to lyrics
             // mode refreshes immediately instead of acting on old data.
             last_track_poll = Instant::now();
             last_pos_poll = Instant::now();
@@ -807,29 +834,26 @@ fn main() {
             lyric.poke();
             force_draw = true;
         }
-        if rnd.mode == RenderMode::Text {
-            if cfg.text_source == "lyrics" {
-                let rows = if cfg.text_style == "normal" {
-                    lyric.display_context(&track, &cfg.sptlrx_text)
-                } else {
-                    lyric.display_lines(&track, &cfg.sptlrx_text)
-                };
-                let shown: String =
-                    rows.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
-                if shown != last_lyric_shown {
-                    last_lyric_shown = shown;
-                    force_draw = true;
-                }
-                rnd.set_rich(&rows);
+        if rnd.mode == RenderMode::Lyrics {
+            let rows = if cfg.text_style == "normal" {
+                lyric.display_context(&track)
             } else {
-                rnd.set_text(&cfg.sptlrx_text);
+                lyric.display_lines(&track)
+            };
+            let shown: String =
+                rows.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
+            if shown != last_lyric_shown {
+                last_lyric_shown = shown;
+                force_draw = true;
             }
+            rnd.set_rich(&rows);
         }
 
         let mut need_draw = force_draw || in_settings;
         if !need_draw {
+            // Lyrics are static (not audio-visualized): redraw only when
+            // the lyric content changes (force_draw), not on audio levels.
             if rnd.mode == RenderMode::Bars
-                || rnd.mode == RenderMode::Text
             {
                 for i in 0..pcl {
                     if heights[0][i] < last_h[0][i] - VIS_EPS || heights[0][i] > last_h[0][i] + VIS_EPS

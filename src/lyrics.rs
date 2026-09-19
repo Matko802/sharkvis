@@ -1151,7 +1151,7 @@ impl LyricWorker {
         self.live_position()
     }
 
-    pub fn display_lines(&self, track: &Track, _static_text: &str) -> Vec<(String, bool)> {
+    pub fn display_lines(&self, track: &Track) -> Vec<(String, bool)> {
         if !track.present || self.lines.is_empty() {
             return vec![("No Lyrics".to_string(), false)];
         }
@@ -1168,7 +1168,7 @@ impl LyricWorker {
         }
     }
 
-    pub fn display_context(&self, track: &Track, _static_text: &str) -> Vec<(String, bool)> {
+    pub fn display_context(&self, track: &Track) -> Vec<(String, bool)> {
         if !track.present || self.lines.is_empty() {
             return vec![("No Lyrics".to_string(), false)];
         }
@@ -1342,36 +1342,36 @@ mod worker_tests {
             LyricLine { t: 20.0, text: "next line".to_string(), words: Vec::new() },
         ]);
         w.update_pos(5.0);
-        assert_eq!(w.display_lines(&track_at(5.0), "STATIC"), vec![(String::new(), true)]);
+        assert_eq!(w.display_lines(&track_at(5.0)), vec![(String::new(), true)]);
         w.update_pos(10.0);
         assert_eq!(
-            w.display_lines(&track_at(10.0), "STATIC"),
+            w.display_lines(&track_at(10.0)),
             vec![("one two three four".to_string(), true)]
         );
         w.update_pos(15.0);
         assert_eq!(
-            w.display_lines(&track_at(15.0), "STATIC"),
+            w.display_lines(&track_at(15.0)),
             vec![("one two three four".to_string(), true)]
         );
         w.update_pos(25.0);
-        assert_eq!(w.display_lines(&track_at(25.0), "STATIC"), vec![("next line".to_string(), true)]);
+        assert_eq!(w.display_lines(&track_at(25.0)), vec![("next line".to_string(), true)]);
     }
 
     #[test]
     fn no_lyrics_without_lines() {
         let w = worker_with(vec![]);
         assert_eq!(
-            w.display_lines(&track_at(3.0), "STATIC"),
+            w.display_lines(&track_at(3.0)),
             vec![("No Lyrics".to_string(), false)]
         );
         let mut no_track = track_at(0.0);
         no_track.present = false;
         assert_eq!(
-            w.display_lines(&no_track, "STATIC"),
+            w.display_lines(&no_track),
             vec![("No Lyrics".to_string(), false)]
         );
         assert_eq!(
-            w.display_context(&track_at(3.0), "STATIC"),
+            w.display_context(&track_at(3.0)),
             vec![("No Lyrics".to_string(), false)]
         );
     }
@@ -1384,11 +1384,11 @@ mod worker_tests {
         let mut gone = track_at(50.0);
         gone.present = false;
         assert_eq!(
-            w.display_lines(&gone, "STATIC"),
+            w.display_lines(&gone),
             vec![("No Lyrics".to_string(), false)]
         );
         assert_eq!(
-            w.display_context(&gone, "STATIC"),
+            w.display_context(&gone),
             vec![("No Lyrics".to_string(), false)]
         );
     }
@@ -1403,7 +1403,7 @@ mod worker_tests {
         ]);
         w.update_pos(35.0);
         assert_eq!(
-            w.display_context(&track_at(35.0), "STATIC"),
+            w.display_context(&track_at(35.0)),
             vec![
                 ("first".to_string(), false),
                 ("second".to_string(), true),
@@ -1412,12 +1412,12 @@ mod worker_tests {
         );
         w.update_pos(5.0);
         assert_eq!(
-            w.display_context(&track_at(5.0), "STATIC"),
+            w.display_context(&track_at(5.0)),
             vec![(String::new(), true), ("first".to_string(), false)]
         );
         w.update_pos(45.0);
         assert_eq!(
-            w.display_context(&track_at(45.0), "STATIC"),
+            w.display_context(&track_at(45.0)),
             vec![("second".to_string(), false), ("third".to_string(), true)]
         );
     }
@@ -1655,13 +1655,13 @@ mod port_tests {
             duration: 30.0,
             url: String::new(),
         };
-        assert_eq!(w.display_lines(&track, "S"), vec![("one two three four".to_string(), true)]);
+        assert_eq!(w.display_lines(&track), vec![("one two three four".to_string(), true)]);
         w.offset_ms = 6000;
-        assert_eq!(w.display_lines(&track, "S"), vec![("next line".to_string(), true)]);
+        assert_eq!(w.display_lines(&track), vec![("next line".to_string(), true)]);
         w.offset_ms = 0;
         w.set_follow(false, 15.0);
         assert!(!w.following());
-        assert_eq!(w.display_lines(&track, "S"), vec![("one two three four".to_string(), true)]);
+        assert_eq!(w.display_lines(&track), vec![("one two three four".to_string(), true)]);
         w.set_follow(true, 15.0);
         assert!(w.following());
     }
