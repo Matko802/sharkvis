@@ -376,7 +376,7 @@ impl SettingsUi {
             );
             y += 1;
             if id == S_MODE {
-                panel_row(out, cap, y, pw, "───────────────", None, None);
+                panel_row(out, cap, y, pw, &"─".repeat(pw.saturating_sub(2)), None, None);
                 y += 1;
             }
         }
@@ -488,9 +488,9 @@ fn panel_row(
             lw = 16;
         }
         text = format!("  {:<lw$} {:<10}", label, v, lw = lw as usize).into_bytes();
-        if text.len() > 79 {
-            text.truncate(79);
-        }
+    while text.len() > 256 {
+        text.pop();
+    }
     } else {
         text = format!("  {}", label).into_bytes();
     }
