@@ -397,6 +397,9 @@ impl SettingsUi {
                 if self.sel == S_RESET { Some("\x1b[7m") } else { None },
             );
         }
+        for yy in 1..=y {
+            append_esc(out, cap, format!("\x1b[0m\x1b[{};{}H│", yy, pw + 1).as_bytes());
+        }
     }
 }
 
