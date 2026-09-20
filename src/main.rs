@@ -694,6 +694,13 @@ fn main() {
         if n > 0 {
             rnd.feed(samples_l, samples_r, n);
         }
+        let frame_dur =
+            Duration::from_nanos((1_000_000_000u64) / (cfg.framerate as u64).max(1));
+        let now = Instant::now();
+        let viz_due = next <= now;
+        if viz_due {
+            next = now.checked_add(frame_dur).unwrap_or_else(Instant::now);
+        }
         // Keep smoothing on the display clock: the `framerate` setting can
         // change without rebuilding the DSP, and it must never depend on
         // the audio sample rate.
@@ -850,7 +857,7 @@ fn main() {
         }
 
         let mut need_draw = force_draw;
-        if !need_draw {
+        if !need_draw && viz_due {
             // Lyrics are static (not audio-visualized): redraw only when
             // the lyric content changes (force_draw), not on audio levels.
             if rnd.mode == RenderMode::Bars
@@ -915,20 +922,13 @@ fn main() {
             }
         }
 
-        let frame_dur = Duration::from_nanos((1_000_000_000u64) / (cfg.framerate as u64).max(1));
         let now = Instant::now();
-        if let Some(until) = next.checked_duration_since(now) {
-            thread::sleep(until);
-            next = next.checked_add(frame_dur).unwrap_or_else(Instant::now);
-        } else {
-            // Frame overran (slow draw, blocking poll, scheduling hitch):
-            // drop the backlog and schedule the next frame from now.
-            // The old code advanced `next` by exactly one frame, so a
-            // single 200ms stall left `next` far in the past and the loop
-            // then spun with no sleep trying to "catch up" - a burst of
-            // back-to-back draws that looks like a stutter, worst in wave
-            // mode which redraws every frame.
-            next = Instant::now().checked_add(frame_dur).unwrap_or_else(Instant::now);
+        let wait = match next.checked_duration_since(now) {
+            Some(d) => d.min(Duration::from_millis(8)),
+            None => Duration::from_millis(0),
+        };
+        if !wait.is_zero() {
+            thread::sleep(wait);
         }
 
         if g_debug {

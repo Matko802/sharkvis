@@ -376,7 +376,7 @@ impl SettingsUi {
             );
             y += 1;
             if id == S_MODE {
-                panel_row(out, cap, y, pw, &"─".repeat(pw.saturating_sub(2)), None, None);
+                append_esc(out, cap, format!("\x1b[0m\x1b[{};1H{}", y, "─".repeat(pw)).as_bytes());
                 y += 1;
             }
         }
