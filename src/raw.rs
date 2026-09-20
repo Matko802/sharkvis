@@ -24,12 +24,14 @@ fn set_handler(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
 pub enum RawMode {
     Bars,
     Wave,
+    Oscilloscope,
 }
 
 pub fn parse_mode(s: &str) -> Option<RawMode> {
     match s.to_ascii_lowercase().as_str() {
         "bars" => Some(RawMode::Bars),
-        "wave" | "oscilloscope" => Some(RawMode::Wave),
+        "wave" => Some(RawMode::Wave),
+        "oscilloscope" => Some(RawMode::Oscilloscope),
         _ => None,
     }
 }
@@ -73,6 +75,7 @@ pub fn run_raw(cfg: &Config, bars: usize, fps: u32, mode: RawMode) -> i32 {
     let mut h0 = vec![0.0f64; bars];
     let mut h1 = vec![0.0f64; bars];
     let mut last: Vec<f64> = Vec::new();
+    let mut last_r: Vec<f64> = Vec::new();
     let mut line = String::with_capacity(bars * 4);
     let stdout = std::io::stdout();
     let mut rc = 0;
@@ -86,6 +89,10 @@ pub fn run_raw(cfg: &Config, bars: usize, fps: u32, mode: RawMode) -> i32 {
             if let Some(s) = sl {
                 last.clear();
                 last.extend_from_slice(&s[..n.min(s.len())]);
+            }
+            if let Some(s) = sr.or(sl) {
+                last_r.clear();
+                last_r.extend_from_slice(&s[..n.min(s.len())]);
             }
         }
         dsp[0].execute(sl, n, &mut h0);
@@ -125,6 +132,30 @@ pub fn run_raw(cfg: &Config, bars: usize, fps: u32, mode: RawMode) -> i32 {
                         line.push(';');
                     }
                     line.push_str(&v.to_string());
+                }
+            }
+            RawMode::Oscilloscope => {
+                for i in 0..bars {
+                    let (l, r) = if last.is_empty() {
+                        (50, 50)
+                    } else {
+                        let sl = last[(i * last.len()) / bars].clamp(-1.0, 1.0);
+                        let sr = if last_r.is_empty() {
+                            sl
+                        } else {
+                            last_r[(i * last_r.len()) / bars].clamp(-1.0, 1.0)
+                        };
+                        (
+                            (50.0 + 50.0 * sl).round() as i32,
+                            (50.0 + 50.0 * sr).round() as i32,
+                        )
+                    };
+                    if i > 0 {
+                        line.push(';');
+                    }
+                    line.push_str(&l.to_string());
+                    line.push(';');
+                    line.push_str(&r.to_string());
                 }
             }
         }
