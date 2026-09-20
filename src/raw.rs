@@ -29,7 +29,7 @@ pub enum RawMode {
 pub fn parse_mode(s: &str) -> Option<RawMode> {
     match s.to_ascii_lowercase().as_str() {
         "bars" => Some(RawMode::Bars),
-        "wave" => Some(RawMode::Wave),
+        "wave" | "oscilloscope" => Some(RawMode::Wave),
         _ => None,
     }
 }

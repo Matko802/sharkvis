@@ -64,7 +64,7 @@ fn set_handler(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
 }
 
 fn usage() {
-    println!("usage: sharkvis [-p config_file] [--raw [--bars N] [--fps N] [--raw-mode bars|wave]]");
+    println!("usage: sharkvis [-p config_file] [--raw [--bars N] [--fps N] [--raw-mode bars|wave|oscilloscope]]");
     println!("  --raw: print bar levels (0-100, ';'-separated, one line per frame) to stdout");
     println!("  g - settings, q - quit");
 }
