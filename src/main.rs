@@ -690,10 +690,6 @@ fn main() {
             }
         }
 
-        let (n, samples_l, samples_r) = audio.consume();
-        if n > 0 {
-            rnd.feed(samples_l, samples_r, n);
-        }
         let frame_dur =
             Duration::from_nanos((1_000_000_000u64) / (cfg.framerate as u64).max(1));
         let now = Instant::now();
@@ -701,15 +697,25 @@ fn main() {
         if viz_due {
             next = now.checked_add(frame_dur).unwrap_or_else(Instant::now);
         }
-        // Keep smoothing on the display clock: the `framerate` setting can
-        // change without rebuilding the DSP, and it must never depend on
-        // the audio sample rate.
-        let disp_fps = cfg.framerate.max(1) as f64;
-        dsp[0].display_fps = disp_fps;
-        dsp[1].display_fps = disp_fps;
-        dsp[0].execute(samples_l, n, &mut heights[0]);
-        if cfg.channels > 1 {
-            dsp[1].execute(samples_r.or(samples_l), n, &mut heights[1]);
+        // Audio analysis runs on the visualizer clock only, so `framerate`
+        // governs the visualizer and nothing else. UI ticks just poll input.
+        let mut n = 0usize;
+        if viz_due {
+            let (cn, samples_l, samples_r) = audio.consume();
+            n = cn;
+            if n > 0 {
+                rnd.feed(samples_l, samples_r, n);
+            }
+            // Keep smoothing on the display clock: the `framerate` setting can
+            // change without rebuilding the DSP, and it must never depend on
+            // the audio sample rate.
+            let disp_fps = cfg.framerate.max(1) as f64;
+            dsp[0].display_fps = disp_fps;
+            dsp[1].display_fps = disp_fps;
+            dsp[0].execute(samples_l, n, &mut heights[0]);
+            if cfg.channels > 1 {
+                dsp[1].execute(samples_r.or(samples_l), n, &mut heights[1]);
+            }
         }
         if audio.failed() {
             eprintln!("\nsharkvis: audio input failed: {}", audio.error());
