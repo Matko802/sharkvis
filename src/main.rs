@@ -849,7 +849,7 @@ fn main() {
             rnd.set_rich(&rows);
         }
 
-        let mut need_draw = force_draw || in_settings;
+        let mut need_draw = force_draw;
         if !need_draw {
             // Lyrics are static (not audio-visualized): redraw only when
             // the lyric content changes (force_draw), not on audio levels.

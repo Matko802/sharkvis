@@ -362,8 +362,6 @@ impl SettingsUi {
         }
         self.clamp_sel(cfg);
         panel_row(out, cap, 1, pw, "sharkvis settings", None, None);
-        panel_row(out, cap, 2, pw, "←, ↑, ↓, → = adjust", None, None);
-        panel_row(out, cap, 3, pw, "g = close, q = quit", None, None);
         let mut y = 6;
         for id in Self::visible_rows(cfg.mode.as_str()) {
             let val = format_value(cfg, id);
@@ -378,7 +376,7 @@ impl SettingsUi {
             );
             y += 1;
             if id == S_MODE {
-                panel_row(out, cap, y, pw, "_______________", None, None);
+                panel_row(out, cap, y, pw, "───────────────", None, None);
                 y += 1;
             }
         }
