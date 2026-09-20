@@ -690,32 +690,19 @@ fn main() {
             }
         }
 
-        let frame_dur =
-            Duration::from_nanos((1_000_000_000u64) / (cfg.framerate as u64).max(1));
-        let now = Instant::now();
-        let viz_due = next <= now;
-        if viz_due {
-            next = now.checked_add(frame_dur).unwrap_or_else(Instant::now);
+        let (n, samples_l, samples_r) = audio.consume();
+        if n > 0 {
+            rnd.feed(samples_l, samples_r, n);
         }
-        // Audio analysis runs on the visualizer clock only, so `framerate`
-        // governs the visualizer and nothing else. UI ticks just poll input.
-        let mut n = 0usize;
-        if viz_due {
-            let (cn, samples_l, samples_r) = audio.consume();
-            n = cn;
-            if n > 0 {
-                rnd.feed(samples_l, samples_r, n);
-            }
-            // Keep smoothing on the display clock: the `framerate` setting can
-            // change without rebuilding the DSP, and it must never depend on
-            // the audio sample rate.
-            let disp_fps = cfg.framerate.max(1) as f64;
-            dsp[0].display_fps = disp_fps;
-            dsp[1].display_fps = disp_fps;
-            dsp[0].execute(samples_l, n, &mut heights[0]);
-            if cfg.channels > 1 {
-                dsp[1].execute(samples_r.or(samples_l), n, &mut heights[1]);
-            }
+        // Keep smoothing on the display clock: the `framerate` setting can
+        // change without rebuilding the DSP, and it must never depend on
+        // the audio sample rate.
+        let disp_fps = cfg.framerate.max(1) as f64;
+        dsp[0].display_fps = disp_fps;
+        dsp[1].display_fps = disp_fps;
+        dsp[0].execute(samples_l, n, &mut heights[0]);
+        if cfg.channels > 1 {
+            dsp[1].execute(samples_r.or(samples_l), n, &mut heights[1]);
         }
         if audio.failed() {
             eprintln!("\nsharkvis: audio input failed: {}", audio.error());
@@ -862,8 +849,8 @@ fn main() {
             rnd.set_rich(&rows);
         }
 
-        let mut need_draw = force_draw;
-        if !need_draw && viz_due {
+        let mut need_draw = force_draw || in_settings;
+        if !need_draw {
             // Lyrics are static (not audio-visualized): redraw only when
             // the lyric content changes (force_draw), not on audio levels.
             if rnd.mode == RenderMode::Bars
@@ -928,13 +915,20 @@ fn main() {
             }
         }
 
+        let frame_dur = Duration::from_nanos((1_000_000_000u64) / (cfg.framerate as u64).max(1));
         let now = Instant::now();
-        let wait = match next.checked_duration_since(now) {
-            Some(d) => d.min(Duration::from_millis(8)),
-            None => Duration::from_millis(0),
-        };
-        if !wait.is_zero() {
-            thread::sleep(wait);
+        if let Some(until) = next.checked_duration_since(now) {
+            thread::sleep(until);
+            next = next.checked_add(frame_dur).unwrap_or_else(Instant::now);
+        } else {
+            // Frame overran (slow draw, blocking poll, scheduling hitch):
+            // drop the backlog and schedule the next frame from now.
+            // The old code advanced `next` by exactly one frame, so a
+            // single 200ms stall left `next` far in the past and the loop
+            // then spun with no sleep trying to "catch up" - a burst of
+            // back-to-back draws that looks like a stutter, worst in wave
+            // mode which redraws every frame.
+            next = Instant::now().checked_add(frame_dur).unwrap_or_else(Instant::now);
         }
 
         if g_debug {
