@@ -356,7 +356,7 @@ impl SettingsUi {
         }
     }
 
-    pub fn draw(&mut self, cfg: &Config, out: &mut Vec<u8>, cap: usize, _rows: u32, pw: usize) {
+    pub fn draw(&mut self, cfg: &Config, out: &mut Vec<u8>, cap: usize, rows: u32, pw: usize) {
         if self.confirm_reset && now_ms() > self.confirm_deadline_ms {
             self.confirm_reset = false;
         }
@@ -397,7 +397,7 @@ impl SettingsUi {
                 if self.sel == S_RESET { Some("\x1b[7m") } else { None },
             );
         }
-        for yy in 1..=y {
+        for yy in 1..=rows {
             append_esc(out, cap, format!("\x1b[0m\x1b[{};{}H│", yy, pw + 1).as_bytes());
         }
     }
