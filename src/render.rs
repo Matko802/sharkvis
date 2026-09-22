@@ -42,6 +42,7 @@ pub struct Renderer {
     wave_pos: usize,
     wave_filled: usize,
     wave_spc: usize,
+    wave_rate: u32,
     osc_l: Vec<f64>,
     osc_r: Vec<f64>,
     osc_cap: usize,
@@ -274,6 +275,7 @@ impl Renderer {
             wave_pos: 0,
             wave_filled: 0,
             wave_spc: 1,
+            wave_rate: 48000,
             osc_l: Vec::new(),
             osc_r: Vec::new(),
             osc_cap: 0,
@@ -394,6 +396,8 @@ impl Renderer {
     }
 
     pub fn set_wave(&mut self, sample_rate: u32) {
+        let rate = if sample_rate == 0 { 48000 } else { sample_rate };
+        self.wave_rate = rate;
         let cap = if sample_rate > 0 {
             sample_rate as usize * 2 / 3
         } else {
@@ -1531,56 +1535,177 @@ impl Renderer {
             self.sc_lo.resize(ncol, 0);
             self.sc_hi.resize(ncol, 0);
         }
-        let spc = if self.wave_spc == 0 { 1 } else { self.wave_spc };
-        let center = (self.rows - 1) as f64 * 0.5;
-        let height = (self.rows - 2) as f64 * 0.5;
-
-        for c in 0..ncol {
-            let off = (region_w - 1 - c) * spc;
-            if off >= self.wave_filled {
-                self.sc_yrow[c] = -1;
-                self.sc_lo[c] = self.rows as i64;
-                self.sc_hi[c] = -1;
-                continue;
-            }
-            let idx = (self.wave_pos + self.wave_cap - 1 - off) % self.wave_cap;
-            let mut v = self.wave_buf[idx];
-            if v < -1.0 {
-                v = -1.0;
-            } else if v > 1.0 {
-                v = 1.0;
-            }
-            self.sc_yrow[c] = (center - v * height + 0.5) as i64;
+        // FL Studio-style triggered oscilloscope (Wave Candy "Oscilloscope"):
+        // fixed timebase (~40ms across the full width), rising-edge trigger
+        // anchored at the left edge, per-column min/max envelope so high
+        // frequencies don't alias away. Free-runs on the newest window when
+        // nothing crosses (silence / noise), exactly like scope AUTO mode.
+        let rate = if self.wave_rate == 0 {
+            48000
+        } else {
+            self.wave_rate as usize
+        };
+        let mut window = rate * 40 / 1000;
+        if window < ncol {
+            window = ncol;
         }
-
-        for c in 0..ncol {
-            let cur = self.sc_yrow[c];
-            if cur < 0 {
-                self.sc_lo[c] = -1;
-                self.sc_hi[c] = -1;
-                continue;
+        if window < 64 {
+            window = 64;
+        }
+        let mut extra = rate * 20 / 1000;
+        if extra < window / 2 {
+            extra = window / 2;
+        }
+        if extra < 64 {
+            extra = 64;
+        }
+        let avail = self.wave_filled.min(self.wave_cap);
+        if avail < 16 {
+            return;
+        }
+        let look = (window + extra).min(avail);
+        if look <= window {
+            // Not enough history yet: free-run on what we have.
+            let base0 = (self.wave_pos + self.wave_cap - look) % self.wave_cap;
+            let center = (self.rows - 1) as f64 * 0.5;
+            let height = (self.rows - 2) as f64 * 0.5;
+            for c in 0..ncol {
+                let k0 = c * look / ncol;
+                let mut k1 = (c + 1) * look / ncol;
+                if k1 <= k0 {
+                    k1 = k0 + 1;
+                }
+                if k0 >= look {
+                    self.sc_yrow[c] = -1;
+                    self.sc_lo[c] = self.rows as i64;
+                    self.sc_hi[c] = -1;
+                    continue;
+                }
+                if k1 > look {
+                    k1 = look;
+                }
+                let mut mn = f64::INFINITY;
+                let mut mx = f64::NEG_INFINITY;
+                for k in k0..k1 {
+                    let v = self.wave_buf[(base0 + k) % self.wave_cap];
+                    if v < mn {
+                        mn = v;
+                    }
+                    if v > mx {
+                        mx = v;
+                    }
+                }
+                if !mn.is_finite() {
+                    self.sc_yrow[c] = -1;
+                    self.sc_lo[c] = self.rows as i64;
+                    self.sc_hi[c] = -1;
+                    continue;
+                }
+                let lo = (center - mx.clamp(-1.0, 1.0) * height + 0.5) as i64;
+                let hi = (center - mn.clamp(-1.0, 1.0) * height + 0.5) as i64;
+                self.sc_yrow[c] = (lo + hi) / 2;
+                self.sc_lo[c] = lo.min(hi);
+                self.sc_hi[c] = lo.max(hi);
             }
-            let mut l = cur;
-            let mut h = cur;
-            if c + 1 < ncol && self.sc_yrow[c + 1] >= 0 {
-                let nxt = self.sc_yrow[c + 1];
-                if nxt < l {
-                    l = nxt;
-                }
-                if nxt > h {
-                    h = nxt;
-                }
-            } else if c + 1 == ncol && c > 0 && self.sc_yrow[c - 1] >= 0 {
-                let nxt = self.sc_yrow[c - 1];
-                if nxt < l {
-                    l = nxt;
-                }
-                if nxt > h {
-                    h = nxt;
+        } else {
+            let base = (self.wave_pos + self.wave_cap - look) % self.wave_cap;
+            let at = |k: usize, buf: &[f64], base: usize, cap: usize| -> f64 {
+                buf[(base + k) % cap]
+            };
+            let mut peak = 0.0f64;
+            for k in 0..look {
+                let a = at(k, &self.wave_buf, base, self.wave_cap).abs();
+                if a > peak {
+                    peak = a;
                 }
             }
-            self.sc_lo[c] = l;
-            self.sc_hi[c] = h;
+            let mut trig: Option<usize> = None;
+            if peak > 0.02 {
+                let t_max = look - window;
+                let mut t = t_max;
+                let reach = (rate * 5 / 1000).max(16);
+                loop {
+                    if t >= 1 && t < look {
+                        let prev = at(t - 1, &self.wave_buf, base, self.wave_cap);
+                        let cur = at(t, &self.wave_buf, base, self.wave_cap);
+                        if prev < 0.0 && cur >= 0.0 {
+                            let end = (t + reach).min(look);
+                            let mut mx = cur;
+                            for k in t..end {
+                                let a = at(k, &self.wave_buf, base, self.wave_cap);
+                                if a > mx {
+                                    mx = a;
+                                }
+                            }
+                            // Hysteresis: ignore tiny noise ripples around
+                            // zero unless the whole signal is that quiet.
+                            if mx > 0.05 || peak < 0.08 {
+                                trig = Some(t);
+                                break;
+                            }
+                        }
+                    }
+                    if t == 0 {
+                        break;
+                    }
+                    t -= 1;
+                }
+            }
+            let start = trig.unwrap_or(look - window);
+            let center = (self.rows - 1) as f64 * 0.5;
+            let height = (self.rows - 2) as f64 * 0.5;
+            for c in 0..ncol {
+                let k0 = start + c * window / ncol;
+                let mut k1 = start + (c + 1) * window / ncol;
+                if k1 <= k0 {
+                    k1 = k0 + 1;
+                }
+                if k0 >= look {
+                    self.sc_yrow[c] = -1;
+                    self.sc_lo[c] = self.rows as i64;
+                    self.sc_hi[c] = -1;
+                    continue;
+                }
+                if k1 > start + window {
+                    k1 = start + window;
+                }
+                if k1 > look {
+                    k1 = look;
+                }
+                // Nearest-sample interpolation for sub-sample column
+                // edges is implicit: k0/k1 are integer floors, the span
+                // below covers every sample in the bucket. For buckets
+                // narrower than one sample (very wide terminal) blend
+                // the two neighbours like FL's "Interpolate" option.
+                let mut mn = f64::INFINITY;
+                let mut mx = f64::NEG_INFINITY;
+                if k1 > k0 {
+                    for k in k0..k1 {
+                        let v = at(k, &self.wave_buf, base, self.wave_cap);
+                        if v < mn {
+                            mn = v;
+                        }
+                        if v > mx {
+                            mx = v;
+                        }
+                    }
+                } else {
+                    mn = at(k0.min(look - 1), &self.wave_buf, base, self.wave_cap);
+                    mx = mn;
+                }
+                // Guard against the (impossible) empty bucket.
+                if !mn.is_finite() {
+                    self.sc_yrow[c] = -1;
+                    self.sc_lo[c] = self.rows as i64;
+                    self.sc_hi[c] = -1;
+                    continue;
+                }
+                let lo = (center - mx.clamp(-1.0, 1.0) * height + 0.5) as i64;
+                let hi = (center - mn.clamp(-1.0, 1.0) * height + 0.5) as i64;
+                self.sc_yrow[c] = (lo + hi) / 2;
+                self.sc_lo[c] = lo.min(hi);
+                self.sc_hi[c] = lo.max(hi);
+            }
         }
 
         let mut st = ColorState::default();
