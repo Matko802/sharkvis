@@ -19,8 +19,6 @@ Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https:
 
 ## Building
 
-Requires gcc, cmake (or just gcc + make), python3 and curl/playerctl/yt-dlp at runtime for lyrics features.
-
 ```sh
 git clone https://github.com/Matko802/sharkvis.git
 cd sharkvis
@@ -28,11 +26,19 @@ make deps
 make
 sudo make install
 ```
-## Updating it
+### Updating it
 
 ```sh
 cd sharkvis && git pull && sudo make install
 ```
+
+## Arch
+```sh
+git clone https://github.com/Matko802/sharkvis.git
+cd sharkvis
+makepkg -si
+```
+
 ## Usage
 
 <div align="center">
