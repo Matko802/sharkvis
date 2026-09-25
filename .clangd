@@ -1,4 +1,4 @@
 CompileFlags:
   Add:
     - "-D_POSIX_C_SOURCE=200809L"
-    - "-std=c11"
+    - "-std=c17"

@@ -4,7 +4,7 @@
 
 # sharkvis
 
-Linux only audio visualizer, now in Rust
+Linux only audio visualizer, now in C
 
 Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer) also [LyricsMPRIS-Rust](https://github.com/BEST8OY/LyricsMPRIS-Rust)
 
@@ -12,12 +12,14 @@ Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https:
 
 ## Features
 
-- PulseAudio / PipeWire support
+- PulseAudio / PipeWire support (native protocol client, no libpulse needed)
 - Autosensitivity, smoothing, adjustable cutoffs
 - Synced lyrics mode
 - integrated with [jefetch](https://github.com/Matko802/jefetch)
 
 ## Building
+
+Requires gcc, cmake (or just gcc + make), python3 and curl/playerctl/yt-dlp at runtime for lyrics features.
 
 ```sh
 git clone https://github.com/Matko802/sharkvis.git

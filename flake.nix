@@ -13,11 +13,12 @@
 
       sharkvis =
         { pkgs }:
-        pkgs.rustPlatform.buildRustPackage {
+        pkgs.stdenv.mkDerivation {
           pname = "sharkvis";
           version = "0.1.0";
           src = pkgs.lib.cleanSource ./.;
-          cargoLock.lockFile = ./Cargo.lock;
+          nativeBuildInputs = [ pkgs.cmake pkgs.python3 ];
+          cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release" ];
           meta = {
             mainProgram = "sharkvis";
             description = "Terminal audio spectrum analyzer";
@@ -28,22 +29,18 @@
         };
     in
     {
-      # Fully static musl build: no glibc, no libpulse. Capture uses the
-      # PulseAudio native protocol implemented directly in Rust (src/pulse.rs).
       packages = forAllSystems (pkgs:
         let
-          staticBuild = sharkvis { pkgs = pkgs.pkgsStatic; };
+          build = sharkvis { pkgs = pkgs.pkgsStatic; };
         in
         {
-          # pkgsStatic appends "-static-<target>" to the derivation name; wrap
-          # the binary in a native derivation so the store name is just "sharkvis".
           default = pkgs.runCommand "sharkvis" { } ''
             mkdir -p $out/bin
-            install -Dm755 ${staticBuild}/bin/sharkvis $out/bin/sharkvis
+            install -Dm755 ${build}/bin/sharkvis $out/bin/sharkvis
           '';
           sharkvis = pkgs.runCommand "sharkvis" { } ''
             mkdir -p $out/bin
-            install -Dm755 ${staticBuild}/bin/sharkvis $out/bin/sharkvis
+            install -Dm755 ${build}/bin/sharkvis $out/bin/sharkvis
           '';
         });
 
@@ -53,7 +50,7 @@
 
       devShells = forAllSystems (pkgs:
         pkgs.mkShell {
-          buildInputs = [ pkgs.pkgsMusl.cargo pkgs.pkgsMusl.rustc ];
+          buildInputs = [ pkgs.gcc pkgs.cmake pkgs.gnumake pkgs.python3 ];
         });
     };
 }

@@ -64,7 +64,7 @@ players = firefox,spotify
 | Key | Notes |
 |-----|-------|
 | `color_mode` | `"24bit"` or `"256"` |
-| `gradient_low` / `gradient_high` | Hex colors, low end to high end |
+| `gradient_low` / `gradient_high` | Terminal color name (`red`, `blue`, `green`, `yellow`, `magenta`, `cyan`, `white`, `black`, `gray`, `orange`, `purple`, `lime`, `teal`, `pink`) or hex (`ff0000`). Names emit terminal colors so they follow the terminal theme, hex emits fixed RGB |
 
 ## Visualizer
 
