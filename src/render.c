@@ -400,9 +400,11 @@ static const uint8_t *render_glyph(const Renderer *r, int gi) {
 
 static void bar_color_buf(const Renderer *r, unsigned from_bottom, unsigned rows,
                           uint8_t **out, size_t *len) {
-    /* Named terminal gradients lerp the parsed RGB (grad_lo/hi hold the
-     * same config names as RGB), smooth like jefetch, instead of banding
-     * at the midpoint. */
+    if (r->grad_lo_term >= 0 && r->grad_hi_term >= 0) {
+        double frac = rows > 1 ? (double)from_bottom / (double)(rows - 1) : 0.0;
+        term_esc_buf(frac < 0.5 ? r->grad_lo_term : r->grad_hi_term, 0, out, len);
+        return;
+    }
     unsigned lo_r = (r->grad_lo >> 16) & 0xff;
     unsigned lo_g = (r->grad_lo >> 8) & 0xff;
     unsigned lo_b = r->grad_lo & 0xff;
@@ -817,7 +819,20 @@ void renderer_set_glyphs(Renderer *r, const uint8_t *src, size_t len) {
 
 static void letter_color_buf(const Renderer *r, double xfrac, double v,
                              uint8_t **out, size_t *len) {
-    /* Same smooth RGB lerp for named terminal gradients (see bar_color_buf). */
+    if (r->grad_lo_term >= 0 && r->grad_hi_term >= 0) {
+        double t = xfrac;
+        if (t < 0.0)
+            t = 0.0;
+        if (t > 1.0)
+            t = 1.0;
+        double vv = v;
+        if (vv < 0.0)
+            vv = 0.0;
+        if (vv > 1.0)
+            vv = 1.0;
+        term_esc_buf(t < 0.5 ? r->grad_lo_term : r->grad_hi_term, vv < 0.6, out, len);
+        return;
+    }
     double lo_r = (double)((r->grad_lo >> 16) & 0xff);
     double lo_g = (double)((r->grad_lo >> 8) & 0xff);
     double lo_b = (double)(r->grad_lo & 0xff);
