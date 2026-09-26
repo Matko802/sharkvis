@@ -151,7 +151,7 @@ Dsp *dsp_new(size_t bars, unsigned rate, int autosens, double noise,
     }
     double *eq = calloc(bars, sizeof(double));
     for (size_t n = 0; n < bars; n++) {
-        eq[n] = 1.0 / pow(2.0, 28.0);
+        eq[n] = 1.0 / pow(2.0, 12.0);
         eq[n] *= pow(cut_freq[n + 1], 0.85);
         eq[n] /= 12.0;
         size_t span = upper[n] >= lower[n] ? upper[n] - lower[n] + 1 : 1;
