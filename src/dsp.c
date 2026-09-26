@@ -24,6 +24,7 @@ struct Dsp {
     uint64_t last_fft_ns;
     unsigned sens_step;
     int any_signal;
+    double raw_peak;
     double *input_buffer;
     size_t *lower_cut_off;
     size_t *upper_cut_off;
@@ -221,6 +222,10 @@ void dsp_set_display_fps(Dsp *d, double fps) {
     d->display_fps = fps;
 }
 
+double dsp_raw_peak(const Dsp *d) {
+    return d->raw_peak;
+}
+
 void dsp_execute(Dsp *d, const double *in_or_null, size_t n, double *out) {
     size_t size = d->input_buffer_size;
     size_t new_samples = n < size ? n : size;
@@ -256,6 +261,11 @@ void dsp_execute(Dsp *d, const double *in_or_null, size_t n, double *out) {
         temp *= d->eq[k];
         out[k] = temp;
     }
+    double peak = 0.0;
+    for (size_t k = 0; k < d->number_of_bars; k++)
+        if (out[k] > peak)
+            peak = out[k];
+    d->raw_peak = peak;
     if (d->autosens) {
         for (size_t k = 0; k < d->number_of_bars; k++)
             out[k] *= d->sens;

@@ -704,6 +704,23 @@ int main(int argc, char **argv) {
             double bass = bcnt > 0 ? bsum / (double)bcnt : energy;
             double left = lcnt > 0 ? lsum / (double)lcnt : energy;
             double right = rcnt > 0 ? rsum / (double)rcnt : left;
+            {
+                static int gate_open = 0;
+                double raw = dsp_raw_peak(dsp[0]);
+                if (cfg.channels > 1) {
+                    double r1 = dsp_raw_peak(dsp[1]);
+                    if (r1 > raw)
+                        raw = r1;
+                }
+                if (gate_open) {
+                    if (raw < 0.01)
+                        gate_open = 0;
+                } else if (raw > 0.02) {
+                    gate_open = 1;
+                }
+                if (!gate_open)
+                    energy = bass = left = right = 0.0;
+            }
             unsigned lr, lg, lb, hr, hg, hb;
             if (!color_to_rgb(cfg.gradient_low, &lr, &lg, &lb)) {
                 lr = 255;
