@@ -15,7 +15,7 @@
         { pkgs }:
         pkgs.stdenv.mkDerivation {
           pname = "sharkvis";
-          version = "0.2.11";
+          version = "0.2.12";
           src = pkgs.lib.cleanSource ./.;
           nativeBuildInputs = [ pkgs.cmake pkgs.python3 ];
           cmakeFlags = [ "-DCMAKE_BUILD_TYPE=Release" ];
