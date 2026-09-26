@@ -410,9 +410,11 @@ static void bar_color_buf(const Renderer *r, unsigned from_bottom, unsigned rows
     unsigned hi_g = (r->grad_hi >> 8) & 0xff;
     unsigned hi_b = r->grad_hi & 0xff;
     double frac = rows > 1 ? (double)from_bottom / (double)(rows - 1) : 0.0;
-    unsigned cr = (unsigned)(lo_r + (hi_r - lo_r) * frac + 0.5);
-    unsigned cg = (unsigned)(lo_g + (hi_g - lo_g) * frac + 0.5);
-    unsigned cb = (unsigned)(lo_b + (hi_b - lo_b) * frac + 0.5);
+    /* Signed math: hi < lo on a channel is normal (e.g. green 255 -> 0).
+     * Unsigned subtraction would underflow to ~4e9 and pin the channel. */
+    unsigned cr = (unsigned)((double)lo_r + ((double)hi_r - (double)lo_r) * frac + 0.5);
+    unsigned cg = (unsigned)((double)lo_g + ((double)hi_g - (double)lo_g) * frac + 0.5);
+    unsigned cb = (unsigned)((double)lo_b + ((double)hi_b - (double)lo_b) * frac + 0.5);
     if (cr > 255)
         cr = 255;
     if (cg > 255)
