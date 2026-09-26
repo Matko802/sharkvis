@@ -9,28 +9,32 @@ permissions:
 
 jobs:
   build:
-    name: build ${{ matrix.target }}
+    name: build ${{ matrix.arch }}
     runs-on: ubuntu-latest
-    container:
-      image: ${{ matrix.image }}
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-musl
-            image: messense/rust-musl-cross:x86_64-musl
+          - arch: x86_64
+            cc: gcc
             asset: sharkvis-linux-x86_64.tar.gz
-          - target: aarch64-unknown-linux-musl
-            image: messense/rust-musl-cross:aarch64-musl
+          - arch: aarch64
+            cc: aarch64-linux-gnu-gcc
             asset: sharkvis-linux-aarch64.tar.gz
     steps:
       - uses: actions/checkout@v4
-      - name: allow workspace in container
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - name: build static binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: install toolchain
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            sudo apt-get install -y gcc make gcc-aarch64-linux-gnu python3
+          else
+            sudo apt-get install -y gcc make python3
+          fi
+      - name: build
+        run: make -j$(nproc) CC=${{ matrix.cc }}
       - name: package
         run: |
-          cp target/${{ matrix.target }}/release/sharkvis sharkvis
+          cp build/sharkvis sharkvis
           tar -czf ${{ matrix.asset }} sharkvis
           rm sharkvis
       - uses: actions/upload-artifact@v4
