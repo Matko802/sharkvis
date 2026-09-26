@@ -23,7 +23,7 @@
 #include "term.h"
 
 #ifndef SHARKVIS_VERSION
-#define SHARKVIS_VERSION "0.1.0"
+#define SHARKVIS_VERSION "0.2.9"
 #endif
 
 #define VIS_EPS 0.001
