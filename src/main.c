@@ -378,6 +378,7 @@ int main(int argc, char **argv) {
 
     set_handler(SIGINT, on_signal);
     set_handler(SIGTERM, on_signal);
+    set_handler(SIGHUP, on_signal);
     set_handler(SIGWINCH, on_winch);
     set_handler(SIGSEGV, on_fatal);
     set_handler(SIGABRT, on_fatal);
@@ -657,10 +658,30 @@ int main(int argc, char **argv) {
         dsp_execute(dsp[0], samples_l, n, heights[0]);
         if (cfg.channels > 1)
             dsp_execute(dsp[1], samples_r ? samples_r : samples_l, n, heights[1]);
+        static int audio_backoff_ms = 500;
+        static uint64_t audio_retry_at = 0;
         if (audio_failed(audio)) {
-            fprintf(stderr, "\nsharkvis: audio input failed: %s\n", audio_error(audio));
-            rc = 1;
-            break;
+            uint64_t now_ms = sv_now_ms();
+            if ((int64_t)(now_ms - audio_retry_at) >= 0) {
+                fprintf(stderr, "\nsharkvis: audio input failed: %s; retrying\n",
+                        audio_error(audio));
+                Audio *na = audio_new(dsp_render_frame_size(dsp[0]));
+                if (na) {
+                    audio_stop(audio);
+                    audio_free(audio);
+                    audio = na;
+                    audio_start(audio, cfg.source, cfg.sample_rate, cfg.channels);
+                    for (int ch = 0; ch < 2; ch++) {
+                        memset(heights[ch], 0, bars * sizeof(double));
+                        dsp_flush(dsp[ch]);
+                    }
+                }
+                audio_retry_at = now_ms + (uint64_t)audio_backoff_ms;
+                if (audio_backoff_ms < 5000)
+                    audio_backoff_ms *= 2;
+            }
+        } else {
+            audio_backoff_ms = 500;
         }
 
         size_t pcl = per_ch_left(bars, cfg.channels);

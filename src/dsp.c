@@ -226,6 +226,20 @@ double dsp_raw_peak(const Dsp *d) {
     return d->raw_peak;
 }
 
+void dsp_flush(Dsp *d) {
+    if (!d)
+        return;
+    memset(d->input_buffer, 0, d->input_buffer_size * sizeof(double));
+    for (size_t k = 0; k < d->number_of_bars; k++) {
+        d->cava_mem[k] = 0.0;
+        d->cava_peak[k] = 0.0;
+        d->cava_fall[k] = 0.0;
+        d->prev_cava_out[k] = 0.0;
+    }
+    d->raw_peak = 0.0;
+    d->any_signal = 0;
+}
+
 void dsp_execute(Dsp *d, const double *in_or_null, size_t n, double *out) {
     size_t size = d->input_buffer_size;
     size_t new_samples = n < size ? n : size;

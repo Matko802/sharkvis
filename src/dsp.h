@@ -17,5 +17,6 @@ void dsp_get_sens(const Dsp *d, double *sens, int *init);
 void dsp_set_sens_scale(Dsp *d, double s);
 void dsp_set_display_fps(Dsp *d, double fps);
 double dsp_raw_peak(const Dsp *d);
+void dsp_flush(Dsp *d);
 
 #endif
