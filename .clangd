@@ -2,3 +2,8 @@ CompileFlags:
   Add:
     - "-D_POSIX_C_SOURCE=200809L"
     - "-std=c17"
+---
+If:
+  PathMatch: .*\.(h|H)$
+CompileFlags:
+  Add: [-xc-header]
