@@ -302,17 +302,27 @@ int main(int argc, char **argv) {
         g_dbg = fopen("/tmp/sharkvis_dbg.log", "w");
 
     char save_path[1024];
+    /* Strictly follow the file: the file is only rewritten when the user
+     * changes something in the menu (cfg_dirty) or when no file exists yet
+     * (had_file). A plain launch+quit never touches it. */
+    int cfg_dirty = 0;
+    int had_file = 0;
     if (cfgpath) {
         snprintf(save_path, sizeof save_path, "%s", cfgpath);
         if (!config_load(&cfg, save_path)) {
             fprintf(stderr, "sharkvis: error loading config %s\n", save_path);
             return 1;
         }
+        had_file = 1;
     } else {
         config_default_path(save_path, sizeof save_path);
         struct stat st;
-        if (stat(save_path, &st) == 0 && !config_load(&cfg, save_path))
-            fprintf(stderr, "sharkvis: error loading config %s, using defaults\n", save_path);
+        if (stat(save_path, &st) == 0) {
+            had_file = 1;
+            if (!config_load(&cfg, save_path))
+                fprintf(stderr, "sharkvis: error loading config %s, using defaults\n",
+                        save_path);
+        }
     }
 
     clamp_cfg(&cfg);
@@ -480,14 +490,26 @@ int main(int argc, char **argv) {
                                rows, cols, chmask, (chmask & CH_AUDIO) != 0, 0);
                 chmask = 0;
                 force_draw = 1;
-                if (!config_save(&cfg, save_path))
+                if (!config_save(&cfg, save_path)) {
                     fprintf(stderr, "sharkvis: could not save config to %s\n", save_path);
+                } else {
+                    cfg_dirty = 1;
+                    /* Strictly follow the file: run exactly what was saved. */
+                    if (config_load(&cfg, save_path)) {
+                        clamp_cfg(&cfg);
+                        apply_settings(dsp, rnd, &audio, &cfg, &bars, heights, last_h,
+                                       rows, cols, CH_LAYOUT | CH_DSP | CH_AUDIO, 0, 0);
+                    }
+                }
             } else if (is_k(key, cp, clen, 'q') || is_k(key, cp, clen, 'Q') || key == 3) {
                 break;
             } else {
+                unsigned mask_before = chmask;
                 settings_key(st, &cfg, key,
                              key == KEY_CHAR ? cp : NULL,
                              key == KEY_CHAR ? clen : 0, &chmask);
+                if (chmask != mask_before)
+                    cfg_dirty = 1;
                 if (chmask & CH_EDITOR) {
                     if (!config_save(&cfg, save_path))
                         fprintf(stderr, "sharkvis: could not save config to %s\n", save_path);
@@ -891,8 +913,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!config_save(&cfg, save_path))
-        fprintf(stderr, "sharkvis: could not save config to %s\n", save_path);
+    if (cfg_dirty || !had_file) {
+        if (!config_save(&cfg, save_path))
+            fprintf(stderr, "sharkvis: could not save config to %s\n", save_path);
+    }
 
     printf("\x1b[?25h\x1b[0m\x1b[2J\x1b[3J\x1b[H");
     fflush(stdout);

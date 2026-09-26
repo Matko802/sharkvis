@@ -34,6 +34,7 @@ void config_default(SvConfig *c) {
     c->lower_cutoff = 50;
     c->higher_cutoff = 8000;
     c->noise_reduction = 0.2;
+    strcpy(c->method, "pulse");
     strcpy(c->source, "auto");
     c->sample_rate = 48000;
     c->channels = 2;
@@ -867,7 +868,9 @@ static int config_save_jsonc(const SvConfig *c, const char *path) {
     fprintf(f, "        \"noise_reduction\": %.2f\n", c->noise_reduction);
     fprintf(f, "    },\n");
     fprintf(f, "    \"input\": {\n");
-    fprintf(f, "        \"method\": \"pulse\",\n");
+    fprintf(f, "        \"method\": ");
+    json_write_str(f, c->method);
+    fprintf(f, ",\n");
     fprintf(f, "        \"source\": ");
     json_write_str(f, c->source);
     fprintf(f, ",\n");
@@ -944,11 +947,15 @@ static void config_apply_jsonc(SvConfig *c, const SjNode *root) {
             sj_getf(sj_get(smoothing, "noise_reduction"), c->noise_reduction);
     const SjNode *input = sj_get(root, "input");
     if (input) {
-        const SjNode *method = sj_get(input, "method");
-        if (method && method->type == SJ_STR && *method->str && strcmp(method->str, "pulse") &&
-            strcmp(method->str, "pipewire") && strcmp(method->str, "auto"))
-            fprintf(stderr, "sharkvis: input method '%s' not supported, using pulse\n",
-                    method->str);
+        char mtmp[256];
+        sj_gets(sj_get(input, "method"), mtmp, sizeof mtmp, "");
+        if (*mtmp) {
+            if (!strcmp(mtmp, "pulse") || !strcmp(mtmp, "pipewire") || !strcmp(mtmp, "auto"))
+                copy_str(c->method, sizeof c->method, mtmp);
+            else
+                fprintf(stderr, "sharkvis: input method '%s' not supported, using pulse\n",
+                        mtmp);
+        }
         char tmp[256];
         sj_gets(sj_get(input, "source"), tmp, sizeof tmp, c->source);
         if (*tmp)

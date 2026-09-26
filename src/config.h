@@ -23,6 +23,7 @@ typedef struct {
     unsigned higher_cutoff;
     double noise_reduction;
     char source[256];
+    char method[32];
     unsigned sample_rate;
     unsigned channels;
     bool color_256;
