@@ -302,9 +302,6 @@ int main(int argc, char **argv) {
         g_dbg = fopen("/tmp/sharkvis_dbg.log", "w");
 
     char save_path[1024];
-    /* Strictly follow the file: the file is only rewritten when the user
-     * changes something in the menu (cfg_dirty) or when no file exists yet
-     * (had_file). A plain launch+quit never touches it. */
     int cfg_dirty = 0;
     int had_file = 0;
     if (cfgpath) {
@@ -494,7 +491,6 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "sharkvis: could not save config to %s\n", save_path);
                 } else {
                     cfg_dirty = 1;
-                    /* Strictly follow the file: run exactly what was saved. */
                     if (config_load(&cfg, save_path)) {
                         clamp_cfg(&cfg);
                         apply_settings(dsp, rnd, &audio, &cfg, &bars, heights, last_h,

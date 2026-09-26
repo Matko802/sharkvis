@@ -244,9 +244,8 @@ void config_default_path(char *buf, size_t n) {
         snprintf(buf, n, "%s", env);
         return;
     }
-    /* JSONC only (same format as jefetch). */
     static const char *cands[] = {
-        NULL, /* $HOME/.config/sharkvis/config.jsonc */
+        NULL,
         "./config.jsonc",
     };
     char home_json[1024] = "";
@@ -262,7 +261,6 @@ void config_default_path(char *buf, size_t n) {
             return;
         }
     }
-    /* Nothing exists yet: create JSONC going forward. */
     if (home && *home)
         snprintf(buf, n, "%s", home_json);
     else
@@ -302,9 +300,6 @@ static void copy_str(char *dst, size_t n, const char *src) {
     strncpy(dst, src, n - 1);
     dst[n - 1] = 0;
 }
-
-/* ---- JSONC config (same format family as jefetch's config.jsonc) ----
- * Line and block comments are allowed in JSONC. */
 
 static void mkdir_p(const char *path);
 
@@ -417,7 +412,6 @@ static int sj_hex(const char *s, unsigned *out) {
     return 1;
 }
 
-/* Encode cp as UTF-8 into buf (returns bytes written, 0 on invalid). */
 static int sj_utf8(unsigned cp, char *buf) {
     if (cp < 0x80) {
         buf[0] = (char)cp;
@@ -449,14 +443,13 @@ static int sj_utf8(unsigned cp, char *buf) {
 static SjNode *sj_parse_value(SjParser *p);
 
 static char *sj_parse_string(SjParser *p) {
-    /* Assumes current char is '"'. Returns decoded malloc'd string. */
     size_t cap = 64, len = 0;
     char *out = malloc(cap);
     if (!out) {
         p->fail = 1;
         return NULL;
     }
-    p->pos++; /* opening quote */
+    p->pos++;
     while (p->pos < p->len) {
         char c = p->text[p->pos];
         if (c == '"') {
@@ -702,7 +695,6 @@ static SjNode *sj_parse_value(SjParser *p) {
         p->pos += 4;
         return nd;
     }
-    /* Number: validate with strtod, keep raw text. */
     {
         char *end = NULL;
         double d = strtod(p->text + p->pos, &end);
@@ -735,8 +727,6 @@ static const SjNode *sj_get(const SjNode *o, const char *key) {
     return NULL;
 }
 
-/* Typed getters accept number/bool/string forms so hand-written configs are
- * forgiving (e.g. "autosens": 1 or "framerate": "60"). */
 static long sj_geti(const SjNode *v, long def) {
     if (!v)
         return def;
@@ -810,7 +800,6 @@ static void sj_gets(const SjNode *v, char *dst, size_t n, const char *def) {
     snprintf(dst, n, "%s", def ? def : "");
 }
 
-/* Escape a string for JSON output. */
 static void json_write_str(FILE *f, const char *s) {
     fputc('"', f);
     for (const unsigned char *p = (const unsigned char *)s; *p; p++) {

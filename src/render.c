@@ -400,9 +400,6 @@ static const uint8_t *render_glyph(const Renderer *r, int gi) {
 
 static void bar_color_buf(const Renderer *r, unsigned from_bottom, unsigned rows,
                           uint8_t **out, size_t *len) {
-    /* Named terminal gradients lerp the parsed RGB (grad_lo/hi hold the
-     * same config names as RGB), smooth like jefetch, instead of banding
-     * at the midpoint. */
     unsigned lo_r = (r->grad_lo >> 16) & 0xff;
     unsigned lo_g = (r->grad_lo >> 8) & 0xff;
     unsigned lo_b = r->grad_lo & 0xff;
@@ -410,8 +407,6 @@ static void bar_color_buf(const Renderer *r, unsigned from_bottom, unsigned rows
     unsigned hi_g = (r->grad_hi >> 8) & 0xff;
     unsigned hi_b = r->grad_hi & 0xff;
     double frac = rows > 1 ? (double)from_bottom / (double)(rows - 1) : 0.0;
-    /* Signed math: hi < lo on a channel is normal (e.g. green 255 -> 0).
-     * Unsigned subtraction would underflow to ~4e9 and pin the channel. */
     unsigned cr = (unsigned)((double)lo_r + ((double)hi_r - (double)lo_r) * frac + 0.5);
     unsigned cg = (unsigned)((double)lo_g + ((double)hi_g - (double)lo_g) * frac + 0.5);
     unsigned cb = (unsigned)((double)lo_b + ((double)hi_b - (double)lo_b) * frac + 0.5);
@@ -819,7 +814,6 @@ void renderer_set_glyphs(Renderer *r, const uint8_t *src, size_t len) {
 
 static void letter_color_buf(const Renderer *r, double xfrac, double v,
                              uint8_t **out, size_t *len) {
-    /* Same smooth RGB lerp for named terminal gradients (see bar_color_buf). */
     double lo_r = (double)((r->grad_lo >> 16) & 0xff);
     double lo_g = (double)((r->grad_lo >> 8) & 0xff);
     double lo_b = (double)(r->grad_lo & 0xff);
