@@ -1,13 +1,12 @@
 # Configuration
 
 Config is looked up in `$SHARKVIS_CONFIG`, then
-`~/.config/sharkvis/config.jsonc`, then `~/.config/sharkvis/config.toml`,
-then `./config.jsonc`, then `./config.toml`. JSONC (JSON with `//` and
-`/* */` comments, same as jefetch) is preferred for new files; TOML still
-loads. Settings changed in the panel save automatically when you close
-them, keeping the file's format.
+`~/.config/sharkvis/config.jsonc`, then `./config.jsonc`.
+JSONC is JSON with `//` and `/* */` comments allowed.
+Settings changed in the panel save automatically when you close
+them.
 
-## Example (JSONC)
+## Example
 
 ```jsonc
 {
@@ -52,49 +51,6 @@ them, keeping the file's format.
         "players": "firefox,spotify"
     }
 }
-```
-
-## Example (TOML, legacy)
-
-```ini
-[general]
-bars = 0
-bar_width = 2
-bar_spacing = 1
-framerate = 60
-sensitivity = 100
-autosens = 1
-lower_cutoff_freq = 50
-higher_cutoff_freq = 8000
-
-[smoothing]
-noise_reduction = 0.20
-
-[input]
-method = pulse
-source = auto
-sample_rate = 48000
-channels = 2
-
-[color]
-color_mode = 24bit
-gradient_low = ffffff
-gradient_high = ffffff
-
-[visualizer]
-mode = lyrics
-chars = ▁▂▃▄▅▆▇█
-text_align = center
-text_size = 1
-text_style = big ahh
-provider = auto
-offset_ms = 0
-
-[lyrics]
-folder = ~/Music
-
-[mpris]
-players = firefox,spotify
 ```
 
 ## General

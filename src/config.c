@@ -243,25 +243,19 @@ void config_default_path(char *buf, size_t n) {
         snprintf(buf, n, "%s", env);
         return;
     }
-    /* JSONC is the preferred format (same as jefetch); TOML still loads for
-     * backward compatibility. An explicit existing file always wins. */
+    /* JSONC only (same format as jefetch). */
     static const char *cands[] = {
         NULL, /* $HOME/.config/sharkvis/config.jsonc */
-        NULL, /* $HOME/.config/sharkvis/config.toml */
         "./config.jsonc",
-        "./config.toml",
     };
     char home_json[1024] = "";
-    char home_toml[1024] = "";
     const char *home = getenv("HOME");
     if (home && *home) {
         snprintf(home_json, sizeof home_json, "%s/.config/sharkvis/config.jsonc", home);
-        snprintf(home_toml, sizeof home_toml, "%s/.config/sharkvis/config.toml", home);
         cands[0] = home_json;
-        cands[1] = home_toml;
     }
     struct stat st;
-    for (size_t i = home && *home ? 0 : 2; i < 4; i++) {
+    for (size_t i = home && *home ? 0 : 1; i < 2; i++) {
         if (stat(cands[i], &st) == 0) {
             snprintf(buf, n, "%s", cands[i]);
             return;
@@ -308,9 +302,8 @@ static void copy_str(char *dst, size_t n, const char *src) {
     dst[n - 1] = 0;
 }
 
-/* ---- JSONC support (same format family as jefetch's config.jsonc) ----
- * sharkvis loads both `config.jsonc` and legacy `config.toml`; new files are
- * created as JSONC. Line and block comments are allowed in JSONC. */
+/* ---- JSONC config (same format family as jefetch's config.jsonc) ----
+ * Line and block comments are allowed in JSONC. */
 
 static void mkdir_p(const char *path);
 
@@ -860,7 +853,6 @@ static int config_save_jsonc(const SvConfig *c, const char *path) {
         return 0;
     fprintf(f, "{\n");
     fprintf(f, "    // Sharkvis config (JSONC — // and /* */ comments allowed).\n");
-    fprintf(f, "    // TOML `config.toml` still loads; this file takes precedence.\n");
     fprintf(f, "    \"general\": {\n");
     fprintf(f, "        \"bars\": %zu,\n", c->bars);
     fprintf(f, "        \"bar_width\": %zu,\n", c->bar_width);
@@ -1077,240 +1069,37 @@ static int config_load_jsonc_text(SvConfig *c, const char *text, size_t len) {
     return ok;
 }
 
-static int path_is_jsonc(const char *path) {
-    size_t n = strlen(path);
-    if (n < 6)
-        return 0;
-    const char *e = path + n - 6;
-    return e[0] == '.' && (e[1] == 'j' || e[1] == 'J') && (e[2] == 's' || e[2] == 'S') &&
-           (e[3] == 'o' || e[3] == 'O') && (e[4] == 'n' || e[4] == 'N') &&
-           (e[5] == 'c' || e[5] == 'C');
-}
-
 int config_load(SvConfig *c, const char *path) {
-    /* JSONC when the file looks like JSON (leading '{'); the .jsonc
-     * extension alone is not trusted so a misnamed TOML still loads. */
-    FILE *probe = fopen(path, "r");
-    if (probe) {
-        int ch = 0, jsonc = 0;
-        do {
-            ch = fgetc(probe);
-            if (ch == 0xEF) { /* skip UTF-8 BOM */
-                if (fgetc(probe) != 0xBB || fgetc(probe) != 0xBF)
-                    break;
-            } else if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
-                continue;
-            } else if (ch == '{') {
-                jsonc = 1;
-            }
-            break;
-        } while (ch != EOF);
-        fclose(probe);
-        if (jsonc) {
-            FILE *f = fopen(path, "r");
-            if (!f)
-                return 0;
-            size_t cap = 65536, len = 0;
-            char *buf = malloc(cap);
-            if (!buf) {
-                fclose(f);
-                return 0;
-            }
-            size_t k = 0;
-            while ((k = fread(buf + len, 1, cap - len - 1, f)) > 0) {
-                len += k;
-                if (len + 1 >= cap) {
-                    if (cap >= (size_t)1024 * 1024)
-                        break;
-                    cap *= 2;
-                    char *nb = realloc(buf, cap);
-                    if (!nb) {
-                        free(buf);
-                        fclose(f);
-                        return 0;
-                    }
-                    buf = nb;
-                }
-            }
-            fclose(f);
-            buf[len] = 0;
-            int ok = config_load_jsonc_text(c, buf, len);
-            free(buf);
-            return ok;
-        }
-    }
     FILE *f = fopen(path, "r");
     if (!f)
         return 0;
-    char line[1024];
-    char section[64] = "general";
-    while (fgets(line, sizeof line, f)) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = 0;
-        char *s = line;
-        while (*s == ' ' || *s == '\t')
-            s++;
-        char *e = s + strlen(s);
-        while (e > s && (e[-1] == ' ' || e[-1] == '\t'))
-            *--e = 0;
-        if (*s == 0 || *s == ';' || *s == '#')
-            continue;
-        if (*s == '[') {
-            char *end = strchr(s, ']');
-            if (end)
-                *end = 0;
-            char *name = s + 1;
-            while (*name == ' ' || *name == '\t')
-                name++;
-            char *ne = name + strlen(name);
-            while (ne > name && (ne[-1] == ' ' || ne[-1] == '\t'))
-                *--ne = 0;
-            size_t i = 0;
-            while (name[i] && i + 1 < sizeof section) {
-                section[i] = (char)tolower((unsigned char)name[i]);
-                i++;
+    size_t cap = 65536, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) {
+        fclose(f);
+        return 0;
+    }
+    size_t k = 0;
+    while ((k = fread(buf + len, 1, cap - len - 1, f)) > 0) {
+        len += k;
+        if (len + 1 >= cap) {
+            if (cap >= (size_t)1024 * 1024)
+                break;
+            cap *= 2;
+            char *nb = realloc(buf, cap);
+            if (!nb) {
+                free(buf);
+                fclose(f);
+                return 0;
             }
-            section[i] = 0;
-            continue;
-        }
-        char *eq = strchr(s, '=');
-        if (!eq)
-            continue;
-        *eq = 0;
-        char *key = s;
-        char *ke = key + strlen(key);
-        while (ke > key && (ke[-1] == ' ' || ke[-1] == '\t'))
-            *--ke = 0;
-        char keyl[64];
-        size_t ki = 0;
-        while (key[ki] && ki + 1 < sizeof keyl) {
-            keyl[ki] = (char)tolower((unsigned char)key[ki]);
-            ki++;
-        }
-        keyl[ki] = 0;
-        char *val = eq + 1;
-        while (*val == ' ' || *val == '\t')
-            val++;
-        char *ve = val + strlen(val);
-        while (ve > val && (ve[-1] == ' ' || ve[-1] == '\t'))
-            *--ve = 0;
-        if (strcmp(keyl, "chars") != 0) {
-            char *semi = strchr(val, ';');
-            if (semi) {
-                *semi = 0;
-                ve = semi;
-                while (ve > val && (ve[-1] == ' ' || ve[-1] == '\t'))
-                    *--ve = 0;
-            }
-        }
-        if (!strcmp(section, "general")) {
-            if (!strcmp(keyl, "bars"))
-                c->bars = (size_t)geti(val, (long)c->bars);
-            else if (!strcmp(keyl, "bar_width"))
-                c->bar_width = (size_t)geti(val, (long)c->bar_width);
-            else if (!strcmp(keyl, "bar_spacing"))
-                c->bar_spacing = (size_t)geti(val, (long)c->bar_spacing);
-            else if (!strcmp(keyl, "framerate"))
-                c->framerate = (unsigned)geti(val, (long)c->framerate);
-            else if (!strcmp(keyl, "sensitivity"))
-                c->sensitivity = getf(val, c->sensitivity);
-            else if (!strcmp(keyl, "autosens"))
-                c->autosens = geti(val, 1) != 0;
-            else if (!strcmp(keyl, "lower_cutoff_freq"))
-                c->lower_cutoff = (unsigned)geti(val, (long)c->lower_cutoff);
-            else if (!strcmp(keyl, "higher_cutoff_freq"))
-                c->higher_cutoff = (unsigned)geti(val, (long)c->higher_cutoff);
-        } else if (!strcmp(section, "smoothing")) {
-            if (!strcmp(keyl, "noise_reduction"))
-                c->noise_reduction = getf(val, c->noise_reduction);
-        } else if (!strcmp(section, "input")) {
-            if (!strcmp(keyl, "method")) {
-                if (*val && strcmp(val, "pulse") && strcmp(val, "pipewire") && strcmp(val, "auto"))
-                    fprintf(stderr, "sharkvis: input method '%s' not supported, using pulse\n", val);
-            } else if (!strcmp(keyl, "source")) {
-                copy_str(c->source, sizeof c->source, val);
-            } else if (!strcmp(keyl, "sample_rate")) {
-                c->sample_rate = (unsigned)geti(val, (long)c->sample_rate);
-            } else if (!strcmp(keyl, "channels")) {
-                c->channels = (unsigned)geti(val, (long)c->channels);
-            }
-        } else if (!strcmp(section, "lyrics")) {
-            if (!strcmp(keyl, "folder"))
-                copy_str(c->lyrics_folder, sizeof c->lyrics_folder, val);
-        } else if (!strcmp(section, "mpris")) {
-            if (!strcmp(keyl, "players"))
-                copy_str(c->mpris_players, sizeof c->mpris_players, val);
-        } else if (!strcmp(section, "color")) {
-            if (!strcmp(keyl, "color_mode")) {
-                if (!strcmp(val, "256") || !strcmp(val, "indexed"))
-                    c->color_256 = 1;
-                else if (!strcmp(val, "24bit") || !strcmp(val, "truecolor"))
-                    c->color_256 = 0;
-                else
-                    c->color_256 = geti(val, 0) != 0;
-            } else if (!strcmp(keyl, "gradient_low")) {
-                unsigned r, g, b;
-                if (color_to_rgb(val, &r, &g, &b))
-                    copy_str(c->gradient_low, sizeof c->gradient_low, val);
-            } else if (!strcmp(keyl, "gradient_high")) {
-                unsigned r, g, b;
-                if (color_to_rgb(val, &r, &g, &b))
-                    copy_str(c->gradient_high, sizeof c->gradient_high, val);
-            }
-        } else if (!strcmp(section, "visualizer")) {
-            if (!strcmp(keyl, "mode")) {
-                if (!strcmp(val, "bars") || !strcmp(val, "wave") ||
-                    !strcmp(val, "oscilloscope") || !strcmp(val, "lissajous")) {
-                    copy_str(c->mode, sizeof c->mode, val);
-                } else if (!strcmp(val, "lyrics")) {
-                    strcpy(c->mode, "lyrics");
-                } else if (!strcmp(val, "text")) {
-                    strcpy(c->mode, "lyrics");
-                }
-            } else if (!strcmp(keyl, "text") || !strcmp(keyl, "text_source")) {
-            } else if (!strcmp(keyl, "text_align")) {
-                if (!strcmp(val, "left") || !strcmp(val, "center"))
-                    copy_str(c->text_align, sizeof c->text_align, val);
-            } else if (!strcmp(keyl, "text_size")) {
-                char *end;
-                long n = strtol(val, &end, 10);
-                if (end != val) {
-                    if (n > 5)
-                        n = 5;
-                    c->text_size = (unsigned)n;
-                }
-            } else if (!strcmp(keyl, "text_style")) {
-                if (!strcmp(val, "big ahh") || !strcmp(val, "normal"))
-                    copy_str(c->text_style, sizeof c->text_style, val);
-                else if (!strcmp(val, "big"))
-                    strcpy(c->text_style, "big ahh");
-                else if (!strcmp(val, "small"))
-                    strcpy(c->text_style, "normal");
-            } else if (!strcmp(keyl, "provider")) {
-                if (!strcmp(val, "auto") || !strcmp(val, "musixmatch") || !strcmp(val, "lrclib"))
-                    copy_str(c->provider, sizeof c->provider, val);
-            } else if (!strcmp(keyl, "offset_ms")) {
-                char *end;
-                long n = strtol(val, &end, 10);
-                if (end != val) {
-                    if (n < -10000)
-                        n = -10000;
-                    if (n > 10000)
-                        n = 10000;
-                    c->lyric_offset_ms = n;
-                }
-            } else if (!strcmp(keyl, "chars")) {
-                size_t n = strlen(val);
-                if (n > sizeof c->chars)
-                    n = sizeof c->chars;
-                memcpy(c->chars, val, n);
-                c->chars_len = n;
-            }
+            buf = nb;
         }
     }
     fclose(f);
-    return 1;
+    buf[len] = 0;
+    int ok = config_load_jsonc_text(c, buf, len);
+    free(buf);
+    return ok;
 }
 
 static void mkdir_p(const char *path) {
@@ -1341,48 +1130,5 @@ static void mkdir_p(const char *path) {
 }
 
 int config_save(const SvConfig *c, const char *path) {
-    /* Save in the format the path asks for; JSONC is the default for new
-     * files (see config_default_path). */
-    if (path_is_jsonc(path))
-        return config_save_jsonc(c, path);
-    mkdir_p(path);
-    FILE *f = fopen(path, "w");
-    if (!f)
-        return 0;
-    fprintf(f, "[general]\n");
-    fprintf(f, "bars = %zu\n", c->bars);
-    fprintf(f, "bar_width = %zu\n", c->bar_width);
-    fprintf(f, "bar_spacing = %zu\n", c->bar_spacing);
-    fprintf(f, "framerate = %u\n", c->framerate);
-    fprintf(f, "sensitivity = %.0f\n", c->sensitivity);
-    fprintf(f, "autosens = %d\n", c->autosens ? 1 : 0);
-    fprintf(f, "lower_cutoff_freq = %u\n", c->lower_cutoff);
-    fprintf(f, "higher_cutoff_freq = %u\n", c->higher_cutoff);
-    fprintf(f, "\n[smoothing]\n");
-    fprintf(f, "noise_reduction = %.2f\n", c->noise_reduction);
-    fprintf(f, "\n[input]\n");
-    fprintf(f, "method = pulse\n");
-    fprintf(f, "source = %s\n", c->source);
-    fprintf(f, "sample_rate = %u\n", c->sample_rate);
-    fprintf(f, "channels = %u\n", c->channels);
-    fprintf(f, "\n[color]\n");
-    fprintf(f, "color_mode = %s\n", c->color_256 ? "256" : "24bit");
-    fprintf(f, "gradient_low = %s\n", c->gradient_low);
-    fprintf(f, "gradient_high = %s\n", c->gradient_high);
-    fprintf(f, "\n[visualizer]\n");
-    fprintf(f, "mode = %s\n", c->mode);
-    fprintf(f, "text_align = %s\n", c->text_align);
-    fprintf(f, "text_size = %u\n", c->text_size);
-    fprintf(f, "text_style = %s\n", c->text_style);
-    fprintf(f, "provider = %s\n", c->provider);
-    fprintf(f, "offset_ms = %ld\n", c->lyric_offset_ms);
-    fprintf(f, "chars = ");
-    fwrite(c->chars, 1, c->chars_len, f);
-    fprintf(f, "\n");
-    fprintf(f, "\n[lyrics]\n");
-    fprintf(f, "folder = %s\n", c->lyrics_folder);
-    fprintf(f, "\n[mpris]\n");
-    fprintf(f, "players = %s\n", c->mpris_players);
-    fclose(f);
-    return 1;
+    return config_save_jsonc(c, path);
 }
