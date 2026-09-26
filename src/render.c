@@ -1868,20 +1868,6 @@ static long long rllround(double v) {
     return (long long)(v >= 0 ? v + 0.5 : v - 0.5);
 }
 
-static void wave_clip_esc_buf(const Renderer *r, uint8_t **out, size_t *len) {
-    if (r->grad_lo_term >= 0 && r->grad_hi_term >= 0) {
-        term_esc_buf(31, 0, out, len);
-        return;
-    }
-    if (r->color_256) {
-        *out = (uint8_t *)strdup("\x1b[38;5;196m");
-        *len = 11;
-        return;
-    }
-    *out = (uint8_t *)strdup("\x1b[38;2;255;64;64m");
-    *len = 17;
-}
-
 static void draw_wave(Renderer *r, size_t x_start, size_t region_w, Out *o) {
     if (r->wave_cap == 0 || r->rows < 3 || region_w == 0)
         return;
@@ -1936,18 +1922,6 @@ static void draw_wave(Renderer *r, size_t x_start, size_t region_w, Out *o) {
         r->sc_lo2[c] = (long long)9223372036854775807LL;
         r->sc_hi2[c] = (long long)-9223372036854775807LL - 1;
     }
-    double peak = 0.0;
-    for (size_t i = 0; i < look; i++) {
-        double a = r->osc_l[(base + i) % cap];
-        double b = stereo ? r->osc_r[(base + i) % cap] : a;
-        double pa = a < 0 ? -a : a;
-        double pb = b < 0 ? -b : b;
-        if (pa > peak)
-            peak = pa;
-        if (pb > peak)
-            peak = pb;
-    }
-    int clipped = peak > 0.99;
     int have_prev = 0;
     double prev_xf = 0;
     long long prev_yl = 0, prev_yr = 0;
@@ -2021,10 +1995,6 @@ static void draw_wave(Renderer *r, size_t x_start, size_t region_w, Out *o) {
             r->sc_hi2[c] = -1;
         }
     }
-    uint8_t *clip_esc = NULL;
-    size_t clip_len = 0;
-    if (clipped)
-        wave_clip_esc_buf(r, &clip_esc, &clip_len);
     ColorState st = {0};
     size_t cy0 = r->rows;
     size_t cy1 = 0;
@@ -2059,22 +2029,14 @@ static void draw_wave(Renderer *r, size_t x_start, size_t region_w, Out *o) {
                 else
                     r->rowbuf[c] = 0;
             }
-            const uint8_t *re;
-            size_t rel;
-            if (clip_esc) {
-                re = clip_esc;
-                rel = clip_len;
-            } else {
-                re = r->row_col[y];
-                rel = r->row_col_len[y];
-            }
+            const uint8_t *re = r->row_col[y];
+            size_t rel = r->row_col_len[y];
             emit_row_raw(r->prev, cols, re, rel, r, y, x_start, ncol, r->rowbuf, &st, o);
         }
     }
     r->db_y0 = cy0;
     r->db_y1 = cy1;
     free(st.col);
-    free(clip_esc);
 }
 
 static void set_beam(Renderer *r, long long x, long long y) {

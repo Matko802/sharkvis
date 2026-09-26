@@ -41,6 +41,7 @@ void config_default(SvConfig *c) {
     c->color_256 = 0;
     strcpy(c->gradient_low, "white");
     strcpy(c->gradient_high, "white");
+    c->colors[0] = 0;
     strcpy(c->mode, "bars");
     strcpy(c->text_align, "center");
     c->text_size = 1;
@@ -299,6 +300,59 @@ static void copy_str(char *dst, size_t n, const char *src) {
         return;
     strncpy(dst, src, n - 1);
     dst[n - 1] = 0;
+}
+
+static void trim_token(const char *s, char *out, size_t n) {
+    while (*s == ' ' || *s == '\t')
+        s++;
+    size_t l = strlen(s);
+    while (l > 0 && (s[l - 1] == ' ' || s[l - 1] == '\t'))
+        l--;
+    if (l >= n)
+        l = n - 1;
+    memcpy(out, s, l);
+    out[l] = 0;
+}
+
+static void apply_colors_style(SvConfig *c) {
+    const char *s = c->colors;
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if (!*s)
+        return;
+    char first[64], second[64];
+    const char *comma = strchr(s, ',');
+    if (!comma) {
+        trim_token(s, first, sizeof first);
+        if (!first[0])
+            return;
+        if (ci_eq(first, "sharkvis")) {
+            copy_str(c->gradient_low, sizeof c->gradient_low, "blue");
+            copy_str(c->gradient_high, sizeof c->gradient_high, "purple");
+            return;
+        }
+        unsigned r, g, b;
+        if (color_to_rgb(first, &r, &g, &b)) {
+            copy_str(c->gradient_low, sizeof c->gradient_low, first);
+            copy_str(c->gradient_high, sizeof c->gradient_high, first);
+        }
+        return;
+    }
+    char left[128];
+    size_t l = (size_t)(comma - s);
+    if (l >= sizeof left)
+        l = sizeof left - 1;
+    memcpy(left, s, l);
+    left[l] = 0;
+    trim_token(left, first, sizeof first);
+    trim_token(comma + 1, second, sizeof second);
+    if (!first[0] || !second[0])
+        return;
+    unsigned r, g, b, r2, g2, b2;
+    if (color_to_rgb(first, &r, &g, &b) && color_to_rgb(second, &r2, &g2, &b2)) {
+        copy_str(c->gradient_low, sizeof c->gradient_low, first);
+        copy_str(c->gradient_high, sizeof c->gradient_high, second);
+    }
 }
 
 static void mkdir_p(const char *path);
@@ -873,6 +927,9 @@ static int config_save_jsonc(const SvConfig *c, const char *path) {
     fprintf(f, ",\n");
     fprintf(f, "        \"gradient_high\": ");
     json_write_str(f, c->gradient_high);
+    fprintf(f, ",\n");
+    fprintf(f, "        \"colors\": ");
+    json_write_str(f, c->colors);
     fprintf(f, "\n");
     fprintf(f, "    },\n");
     fprintf(f, "    \"visualizer\": {\n");
@@ -989,6 +1046,10 @@ static void config_apply_jsonc(SvConfig *c, const SjNode *root) {
             if (color_to_rgb(tmp, &r, &g, &b))
                 copy_str(c->gradient_high, sizeof c->gradient_high, tmp);
         }
+        sj_gets(sj_get(color, "colors"), tmp, sizeof tmp, "");
+        if (*tmp)
+            copy_str(c->colors, sizeof c->colors, tmp);
+        apply_colors_style(c);
     }
     const SjNode *vis = sj_get(root, "visualizer");
     if (vis) {

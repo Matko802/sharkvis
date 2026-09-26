@@ -29,6 +29,7 @@ typedef struct {
     bool color_256;
     char gradient_low[64];
     char gradient_high[64];
+    char colors[128];
     char mode[32];
     char text_align[16];
     unsigned text_size;

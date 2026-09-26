@@ -33,7 +33,8 @@ them.
     "color": {
         "color_mode": "24bit", // or "256"
         "gradient_low": "ffffff",
-        "gradient_high": "ffffff"
+        "gradient_high": "ffffff",
+        "colors": "" // or "sharkvis", "#ff0000", "#00ff00,#0000ff"
     },
     "visualizer": {
         "mode": "lyrics",
@@ -71,6 +72,7 @@ them.
 |-----|-------|
 | `color_mode` | `"24bit"` or `"256"` |
 | `gradient_low` / `gradient_high` | Terminal color name (`red`, `blue`, `green`, `yellow`, `magenta`, `cyan`, `white`, `black`, `gray`, `orange`, `purple`, `lime`, `teal`, `pink`) or hex (`ff0000`). Names emit terminal colors so they follow the terminal theme, hex emits fixed RGB |
+| `colors` | Whole-style shortcut that overrides both gradients: `sharkvis` for the blue→purple logo colors, one color for solid (`#ff0000`), or a `low,high` pair (`#00ff00,#0000ff`). Empty means off |
 
 ## Visualizer
 
