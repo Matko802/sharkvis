@@ -63,8 +63,7 @@ pub fn run_raw(cfg: &Config, bars: usize, fps: u32, mode: RawMode) -> i32 {
     dsp[1].display_fps = fps as f64;
     dsp[0].sens_scale = cfg.sensitivity / 100.0;
     dsp[1].sens_scale = cfg.sensitivity / 100.0;
-    // Same resume as interactive mode: a fresh process keeps humming at
-    // converged levels when the previous session just exited.
+
     if let Some(rsens) = crate::state::read_sens() {
         dsp[0].sens = rsens;
         dsp[0].sens_init = false;

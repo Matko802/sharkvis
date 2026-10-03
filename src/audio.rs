@@ -83,8 +83,7 @@ impl Audio {
             if n == usize::MAX || n > BLOCK_FRAMES {
                 break;
             }
-            // Blocks are variable-length now (partial flushes); leave the
-            // block queued if it would overflow this frame's buffer.
+
             if n > 0 && frames + n > cap {
                 break;
             }
@@ -149,7 +148,7 @@ fn push_block(shared: &Arc<Shared>, staged: &[f64], staged_cnt: usize) {
         let _ = shared.ring[slot].store(staged_cnt, Ordering::Relaxed);
         shared.head.fetch_add(1, Ordering::Release);
     }
-    // Ring full: drop the newest samples (same policy as before).
+
 }
 
 fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
@@ -194,7 +193,7 @@ fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
     loop {
         match rec.read(&mut raw, &shared.terminate) {
             Ok(0) => {
-                // Flush any staged tail before exiting so no audio is lost.
+
                 if staged_cnt > 0 {
                     push_block(&shared, &staged, staged_cnt);
                 }
@@ -204,10 +203,7 @@ fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
                 let nframes = n / nbytes_per_frame;
                 let mut f = 0;
                 while f < nframes {
-                    // Fill the staging block; push it as soon as it is
-                    // full and keep going so loud/high-rate reads that
-                    // exceed BLOCK_FRAMES are split across blocks instead
-                    // of dropping the tail (old code `break`ed here).
+
                     while f < nframes && staged_cnt < BLOCK_FRAMES {
                         let l = i16::from_le_bytes([
                             raw[f * nbytes_per_frame],
@@ -234,13 +230,6 @@ fn capture(shared: Arc<Shared>, source: String, rate: u32, channels: u32) {
                     }
                 }
 
-                // Push partial blocks immediately instead of waiting for a
-                // full 512 frames. A full block spans 512/rate seconds
-                // (~64ms at 8kHz vs ~10ms at 48kHz); waiting for it made
-                // low sample rates deliver audio in bursts every few
-                // display frames, which collapsed the visual refresh rate
-                // and made motion jumpy. Flushing each read keeps delivery
-                // at the ~5ms Pulse fragment cadence for every rate.
                 if staged_cnt > 0 {
                     push_block(&shared, &staged, staged_cnt);
                     staged_cnt = 0;

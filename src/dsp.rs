@@ -13,10 +13,7 @@ pub struct Dsp {
     pub sens: f64,
     pub sens_init: bool,
     pub sens_scale: f64,
-    /// Visual refresh rate (frames/sec) used for time-based smoothing.
-    /// Must be synced from the display loop (`cfg.framerate`); it is
-    /// deliberately independent of the audio sample rate so changing
-    /// `sample_rate` never changes fall speed / smoothness.
+
     pub display_fps: f64,
     pub noise_reduction: f64,
 
@@ -28,8 +25,7 @@ pub struct Dsp {
     fft_interval: std::time::Duration,
     sens_step: u32,
     any_signal: bool,
-    /// Pre-gain peak (after EQ, before autosens): absolute level used for
-    /// state squelch so silence dust never publishes as signal.
+
     raw_peak: f64,
 
     input_buffer: Vec<f64>,
@@ -55,13 +51,10 @@ impl Dsp {
         self.input_buffer_size
     }
 
-    /// Pre-gain peak of the last frame (after EQ, before autosens).
     pub fn raw_peak(&self) -> f64 {
         self.raw_peak
     }
 
-    /// Drop all buffered audio and smoothing state (audio reconnect).
-    /// Learned autosens gain is preserved.
     pub fn flush(&mut self) {
         self.input_buffer.fill(0.0);
         self.cava_mem.fill(0.0);
@@ -87,12 +80,7 @@ impl Dsp {
         } else if rate > 300000 {
             s *= 64;
         }
-        // Keep the original table's ~85ms analysis window at high rates
-        // too: capping N while rate keeps growing makes bins coarser in Hz
-        // (23Hz+ at 192kHz), so bands narrower than the main lobe get
-        // sliced differently per rate and bar heights diverge again.
-        // 16384 covers the whole 192kHz setting range; the per-frame cost
-        // (~2x an 8192 FFT) only applies when those rates are selected.
+
         if s > 16384 {
             s = 16384;
         }
@@ -109,10 +97,7 @@ impl Dsp {
     ) -> Self {
         let fft_size = Self::pick_fft_size(rate);
         let input_buffer_size = fft_size;
-        // Nothing can be analyzed above Nyquist; clamp the window so low
-        // sample rates (e.g. 8kHz) with a higher default cutoff (8kHz)
-        // don't pile every top band onto a single bin and underflow the
-        // band math below.
+
         let nyquist = (rate / 2).max(2);
         let high_cut_off = high_cut_off.clamp(2, nyquist);
         let low_cut_off = low_cut_off.clamp(1, high_cut_off - 1);
@@ -192,19 +177,10 @@ impl Dsp {
 
         let mut eq = vec![0.0f64; number_of_bars];
         for n in 0..number_of_bars {
-            // Absolute normalization: a full-scale sine reads ~1.0, flat
-            // down to zero, at any sample rate.
+
             eq[n] = 1.0 / 2.0f64.powf(12.0);
             eq[n] *= cut_freq[n + 1].powf(0.85);
-            // Gain calibration, independent of sample rate: FFT magnitudes
-            // grow linearly with N (coherent gain) while a fixed-Hz band
-            // spans N/rate bins, so without correction a taller FFT reads
-            // louder and `sample_rate` would change bar heights. The
-            // 48000/rate factor cancels the N/rate bin-count growth and the
-            // /12 pins the old /log2(N) at log2(4096), so 48kHz output is
-            // bit-identical to before while every other rate now matches
-            // it: same Hz tone at same amplitude gives same bars at any
-            // rate.
+
             eq[n] /= 12.0;
             eq[n] /= (upper[n].saturating_sub(lower[n]) + 1) as f64;
             eq[n] *= 48000.0 / rate as f64;
@@ -255,12 +231,6 @@ impl Dsp {
             self.input_buffer_size
         };
 
-        // Ingest whatever audio arrived. When the display loop outruns the
-        // audio thread (common at low sample rates where one 512-frame
-        // block spans several 16ms frames) there may be nothing new: keep
-        // the old buffer and still tick the FFT + falloff below so bars
-        // decay at full display rate instead of freezing between blocks.
-        // Refresh/smoothness therefore follow `display_fps`, never `rate`.
         if new_samples > 0 {
             if let Some(ci) = cava_in {
                 let size = self.input_buffer_size;
@@ -319,8 +289,7 @@ impl Dsp {
         }
 
         let mut overshoot = false;
-        // Time-based falloff: driven by the display rate, not by the audio
-        // sample rate, so `sample_rate` never changes fall speed.
+
         let fps = self.display_fps.clamp(1.0, 1000.0);
         let mut gravity_mod =
             (60.0 / fps).powf(2.5) * 1.54 / self.noise_reduction.max(0.01);
@@ -394,10 +363,7 @@ mod tests {
         dsp.display_fps = 60.0;
         let n = dsp.render_frame_size();
         let mut out = vec![0.0; bars];
-        // Feed a continuous sine in chunks until the input buffer holds
-        // only the tone and everything has settled to steady state. The
-        // falloff in leakage bands needs ~35 ticks after the fill to
-        // finish, so settle generously (steady-state proof, not speed).
+
         let chunk = 512.min(n);
         let ticks = n / chunk + 40;
         let mut buf = vec![0.0; chunk];
@@ -426,11 +392,7 @@ mod tests {
 
     #[test]
     fn bar_height_independent_of_sample_rate() {
-        // Overall gain calibration: the same Hz tone at the same amplitude
-        // must read the same at every sample rate. (Very low bass bands
-        // are excluded: down there a band is ~1 FFT bin wide, so rounding
-        // a band edge to the nearest bin reshapes those bands per rate no
-        // matter the gain - geometry, not gain.)
+
         let rates = [8000u32, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
         for freq in [220.0, 440.0, 1500.0] {
             let mut totals = Vec::new();

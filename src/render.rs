@@ -177,9 +177,7 @@ impl Renderer {
         } else {
             0.0
         };
-        // Gradient amount: quantize the blend position into that many
-        // discrete bands (100 = smooth). 0 would collapse everything onto
-        // the low end by construction, so it behaves as solid-low.
+
         let levels = self.grad_amt.clamp(1, 100) as f64;
         frac = (frac * levels).floor() / levels;
         let mut cr = (lo_r as f64 + (hi_r as f64 - lo_r as f64) * frac + 0.5) as u32;
@@ -366,8 +364,7 @@ impl Renderer {
         } else if name == "oscilloscope" || name == "lissajous" {
             RenderMode::Oscilloscope
         } else if name == "lyrics" || name == "text" {
-            // "text" is the old name for the lyrics mode, kept as an alias
-            // so existing configs keep working.
+
             RenderMode::Lyrics
         } else {
             RenderMode::Bars
@@ -1027,9 +1024,7 @@ impl Renderer {
             self.clear_text_region(x_start, region_w, out);
             return;
         }
-        // Lyrics are intentionally NOT audio-visualized: fixed full
-        // brightness. Only the gradient (left->right) and the greyed
-        // context lines vary.
+
         let marker = 79u8;
         let esc = self.letter_color(0.5, 1.0);
         let grey_esc = if self.color_256 {
@@ -1212,8 +1207,7 @@ impl Renderer {
             for (k, &ci) in line.iter().enumerate() {
                 let (g, w, _) = &gs[k];
                 let box_w = if k + 1 < line.len() { (w + 1) * s } else { w * s };
-                // Not audio-visualized: fixed brightness, dimmed only for
-                // context (non-current) lyric lines.
+
                 let v = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
                 let marker = 64 + (v * 15.0 + 0.5) as u8;
                 let xfrac = (k as f64 + 0.5) / line.len() as f64;
@@ -1554,11 +1548,7 @@ impl Renderer {
             self.sc_lo2.resize(ncol, 0);
             self.sc_hi2.resize(ncol, 0);
         }
-        // LMMS master-oscilloscope style (toolbar Wave display,
-        // Oscilloscope.cpp): newest ~5ms snapshot redrawn every frame
-        // with no trigger sync, so the phase jumps like the original.
-        // Thin L+R polylines overlaid (two span sets, ORed at emit),
-        // LMMS vertical scale ((rows-6)/3: headroom above and below).
+
         let rate = if self.wave_rate == 0 {
             48000
         } else {
@@ -1587,8 +1577,7 @@ impl Renderer {
         let mut pl: Option<i64> = None;
         let mut pr: Option<i64> = None;
         for c in 0..ncol {
-            // Fractional position of this column inside the snapshot;
-            // linear interpolation like LMMS's antialiased polyline.
+
             let p = c as f64 * span / denom;
             let i0 = (p.floor() as usize).min(look - 1);
             let i1 = (i0 + 1).min(look - 1);
@@ -1605,7 +1594,7 @@ impl Renderer {
             };
             let yl = (center - vl * height + 0.5) as i64;
             let yr = (center - vr * height + 0.5) as i64;
-            // Per-channel thin segments (current + previous column).
+
             let (mut llo, mut lhi) = (yl, yl);
             if let Some(q) = pl {
                 llo = llo.min(q);
@@ -1665,9 +1654,7 @@ impl Renderer {
                         0
                     };
                 }
-                // Borrow disjoint fields directly: no per-row Vec alloc.
-                // (The old `to_vec()` here allocated ~rows times per frame,
-                // allocator churn on the 60fps wave path.)
+
                 let (prev, rowbuf, row_col, glyphs) = (
                     &mut self.prev,
                     &self.rowbuf[..ncol],
@@ -1918,7 +1905,7 @@ mod tests {
     #[test]
     fn mode_parses_lyrics() {
         assert!(Renderer::mode_parse("lyrics") == RenderMode::Lyrics);
-        // Old name kept as an alias for existing configs.
+
         assert!(Renderer::mode_parse("text") == RenderMode::Lyrics);
         assert!(Renderer::mode_parse("wave") == RenderMode::Wave);
         assert!(Renderer::mode_parse("nope") == RenderMode::Bars);
@@ -1930,7 +1917,7 @@ mod tests {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.mode = RenderMode::Wave;
         r.set_wave(48000);
-        // Hard-panned: L = 440Hz sine, R = silence.
+
         let n = 2048;
         let mut l = vec![0.0; n];
         let rr = vec![0.0; n];
@@ -1941,11 +1928,11 @@ mod tests {
         let mut out = Vec::new();
         r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(!out.is_empty(), "snapshot must emit cells");
-        // L trace swings around center...
+
         let lo = *r.sc_lo.iter().min().unwrap();
         let hi = *r.sc_hi.iter().max().unwrap();
         assert!(hi - lo >= 6, "L sine must swing, got {}..{}", lo, hi);
-        // ...thinly (no thick min/max fill).
+
         for c in 0..80 {
             assert!(
                 r.sc_hi[c] - r.sc_lo[c] <= 4,
@@ -1954,7 +1941,7 @@ mod tests {
                 r.sc_hi[c] - r.sc_lo[c]
             );
         }
-        // R trace sits flat at center (12 = (24-1)/2 + 0.5).
+
         assert!(
             r.sc_lo2.iter().all(|&v| (v - 12).abs() <= 1),
             "silent R must sit at center, got {:?}",
@@ -1977,8 +1964,7 @@ mod tests {
 
     #[test]
     fn lyrics_ignore_audio_levels() {
-        // Lyrics are not audio-visualized: identical output regardless of
-        // the (now ignored) audio state, at fixed full brightness.
+
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("AB");
         r.grad_lo = 0x000000;

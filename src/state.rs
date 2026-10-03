@@ -63,8 +63,7 @@ impl StateWriter {
             }
         }
         let (r, g, b) = if grad_amt < 100 {
-            // Discrete gradient bands: quantize the blend position like the
-            // on-screen renderer so the published color steps with it.
+
             let levels = grad_amt.max(1) as f64;
             let tq = (e as f64).clamp(0.0, 1.0);
             lerp_rgb(low, high, (tq * levels).floor() as f32 / levels as f32)
@@ -75,8 +74,7 @@ impl StateWriter {
         let (hr, hg, hb) = high;
         let l = left.clamp(0.0, 1.0);
         let rr = right.clamp(0.0, 1.0);
-        // Learned autosens rides along so a restarted instance can resume at
-        // converged levels. Only finite, sane values; consumers ignore it.
+
         let sens_field = if sens.is_finite() && sens > 0.0 && sens < 1e6 {
             format!(" sens={:.6}", sens)
         } else {
@@ -87,8 +85,7 @@ impl StateWriter {
             r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr,
             self.started_ms, self.pid, sens_field
         );
-        // Per-session file first (what new consumers follow), legacy
-        // singleton second for older consumers. Same body both places.
+
         if !self.custom {
             if let Some(sess) = session_sibling(&path) {
                 write_atomic(&sess, body.as_bytes(), &mut self.dir_ready);
@@ -98,10 +95,6 @@ impl StateWriter {
     }
 }
 
-/// Learned autosens of the last session, when its state file is still
-/// fresh (<30s). Same audio context is likely, so resuming at converged
-/// levels beats re-adapting from scratch. Returns `None` when unknown,
-/// stale, missing, or out of range.
 pub fn read_sens() -> Option<f64> {
     if std::env::var_os("SHARKVIS_NO_STATE").is_some() {
         return None;
@@ -348,9 +341,6 @@ pub fn state_path() -> String {
     format!("/tmp/sharkvis-{}.state", uid)
 }
 
-/// Wall-clock millis when this session started. Published in every state
-/// body as `started=` so consumers with several live sessions can follow
-/// only the newest one and ignore older ones.
 pub fn session_started_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -362,10 +352,6 @@ fn own_pid() -> u32 {
     unsafe { libc::getpid() as u32 }
 }
 
-/// Sibling per-session file for a default state path, e.g.
-/// `…/sharkvis/state` → `…/sharkvis/state-<pid>`. Only inside a directory
-/// literally named `sharkvis` (the XDG / /run/user layout) — never in
-/// `/tmp` or next to a custom `SHARKVIS_STATE` file.
 fn session_sibling(state_path: &str) -> Option<String> {
     let p = std::path::Path::new(state_path);
     let parent = p.parent()?;
@@ -385,15 +371,12 @@ fn remove_with_tmp(path: &str) {
     let _ = std::fs::remove_file(format!("{}.tmp", path));
 }
 
-/// Remove our state files, if we own any. Best-effort; called on exit so
-/// consumers (e.g. `jefetch --static`) don't keep showing frozen colors
-/// from a dead instance.
 pub fn clear_state_file() {
     if state_disabled() {
         return;
     }
     let path = state_path();
-    // Same pid → same session name, so recomputing finds our file.
+
     if custom_state_path().is_none() {
         if let Some(sess) = session_sibling(&path) {
             remove_with_tmp(&sess);
@@ -409,8 +392,6 @@ fn file_age(path: &std::path::Path) -> Option<Duration> {
         .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
 }
 
-/// Drop stale per-session leftovers in `dir`. Fresh files belong to live
-/// instances (concurrent or our own) and are always kept.
 fn sweep_session_dir(dir: &std::path::Path) {
     let entries = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -428,9 +409,6 @@ fn sweep_session_dir(dir: &std::path::Path) {
     }
 }
 
-/// Drop leftover files from crashed runs. A live producer rewrites every
-/// ~50ms, so anything older than a second can't be live; anything fresher
-/// is left alone so concurrently running instances are never disturbed.
 pub fn remove_stale_state() {
     if state_disabled() {
         return;
@@ -452,9 +430,6 @@ pub fn remove_stale_state() {
 mod tests {
     use super::*;
 
-    // These tests mutate process env (SHARKVIS_STATE / SHARKVIS_NO_STATE),
-    // which is process-global: serialize them so parallel tests can't
-    // clobber each other's vars mid-assertion.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn env_guard() -> std::sync::MutexGuard<'static, ()> {

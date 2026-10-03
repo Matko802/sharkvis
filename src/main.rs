@@ -184,8 +184,6 @@ fn config_use_jefetch_colors(cfg: &Config) -> bool {
     tok.eq_ignore_ascii_case("jefetch")
 }
 
-/// Gradient pair published by jefetch (`low=#RRGGBB high=#RRGGBB`), runtime
-/// dir first, then the /tmp fallback. Both ends required and validated.
 fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
     use crate::config::color_to_rgb_any;
     let uid = unsafe { libc::getuid() };
@@ -317,6 +315,15 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.bar_width < 1 {
         cfg.bar_width = 1;
     }
+    if cfg.bar_width > 8 {
+        cfg.bar_width = 8;
+    }
+    if cfg.bar_spacing > 4 {
+        cfg.bar_spacing = 4;
+    }
+    if cfg.bars > 256 {
+        cfg.bars = 256;
+    }
     if cfg.framerate < 1 {
         cfg.framerate = 1;
     }
@@ -335,8 +342,26 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.lower_cutoff < 1 {
         cfg.lower_cutoff = 1;
     }
-    if cfg.higher_cutoff < cfg.lower_cutoff {
-        cfg.higher_cutoff = cfg.lower_cutoff + 1;
+    if cfg.lower_cutoff > 24000 {
+        cfg.lower_cutoff = 24000;
+    }
+    if cfg.higher_cutoff < 2 {
+        cfg.higher_cutoff = 2;
+    }
+    if cfg.higher_cutoff > 24000 {
+        cfg.higher_cutoff = 24000;
+    }
+    if cfg.higher_cutoff <= cfg.lower_cutoff {
+        cfg.higher_cutoff = cfg.lower_cutoff.saturating_add(1).clamp(2, 24000);
+        if cfg.higher_cutoff <= cfg.lower_cutoff {
+            cfg.lower_cutoff = cfg.higher_cutoff.saturating_sub(1).max(1);
+        }
+    }
+    if cfg.sample_rate < 8000 {
+        cfg.sample_rate = 8000;
+    }
+    if cfg.sample_rate > 192000 {
+        cfg.sample_rate = 192000;
     }
     if cfg.channels < 1 {
         cfg.channels = 1;
@@ -344,7 +369,7 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.channels > 2 {
         cfg.channels = 2;
     }
-    // Migrate the old "text" mode name to "lyrics".
+
     if cfg.mode == "text" {
         cfg.mode = "lyrics".to_string();
     }
@@ -469,8 +494,7 @@ fn main() {
     ];
     dsp[0].display_fps = cfg.framerate.max(1) as f64;
     dsp[1].display_fps = cfg.framerate.max(1) as f64;
-    // Resume converged autosens from a recently exited session instead of
-    // re-adapting from scratch for seconds after every restart.
+
     if let Some(rsens) = state::read_sens() {
         dsp[0].sens = rsens;
         dsp[0].sens_init = false;
@@ -522,7 +546,7 @@ fn main() {
     let mut heights: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
     let mut last_h: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
     let mut out = Vec::with_capacity(OUT_CAP);
-    // Audio reconnect backoff: survive device loss instead of exiting.
+
     let mut audio_backoff_ms: u64 = 500;
     let mut audio_retry_at = Instant::now();
 
@@ -530,11 +554,10 @@ fn main() {
     let mut in_settings = false;
     let mut force_draw = true;
     let mut chmask: u32 = 0;
-    // Save strictness: plain launch+quit never touches the file; only real
-    // edits mark it dirty. Tracks whether a config existed at startup.
+
     let mut cfg_dirty = false;
     let had_file = std::path::Path::new(&save_path).exists();
-    // Hot-reload stamp for the color section (config edited elsewhere).
+
     let mut last_color_check = Instant::now();
     let mut last_color_stamp: Option<(std::time::SystemTime, u64)> = None;
     let mut lyric = LyricWorker::new();
@@ -548,11 +571,9 @@ fn main() {
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
-    // Squelch gate for published state: hysteresis on the pre-gain peak so
-    // silence dust never publishes as signal. Bars on screen are untouched.
+
     let mut gate_open = false;
-    // Drop leftovers from a crashed run so consumers never read a dead
-    // instance's colors. Fresh files are kept (concurrent instance).
+
     state::remove_stale_state();
 
     let rc = 0;
@@ -650,8 +671,7 @@ fn main() {
                         &mut last_h, rows, cols, chmask, (chmask & CH_AUDIO) != 0,
                         panel_width_for(cols),
                     );
-                    // Live persist: a crash after this point no longer loses
-                    // the change.
+
                     cfg_dirty = true;
                     if !config_save(&cfg, &save_path) {
                         eprintln!("sharkvis: could not save config to {}", save_path);
@@ -803,9 +823,7 @@ fn main() {
         if n > 0 {
             rnd.feed(samples_l, samples_r, n);
         }
-        // Keep smoothing on the display clock: the `framerate` setting can
-        // change without rebuilding the DSP, and it must never depend on
-        // the audio sample rate.
+
         let disp_fps = cfg.framerate.max(1) as f64;
         dsp[0].display_fps = disp_fps;
         dsp[1].display_fps = disp_fps;
@@ -908,10 +926,7 @@ fn main() {
                     right = 0.0;
                 }
             }
-            // Publish what is actually on screen (bars, wave, lyrics text
-            // all render from rnd.grad_lo/hi). In jefetch mode those come
-            // from the live logo_colors file, so jefetch text following
-            // this state (textcolor=sharkvis) stays in sync too.
+
             let lo_u = rnd.grad_lo;
             let hi_u = rnd.grad_hi;
             let lo = (
@@ -927,29 +942,19 @@ fn main() {
             live.update(energy, bass, left, right, lo, hi, dsp[0].sens, cfg.gradient_amt);
         }
 
-        // MPRIS (playerctl subprocesses) + lyric fetching block the render
-        // thread for milliseconds per call. In wave/bars/oscilloscope modes
-        // nothing on screen uses track/lyrics, so skip all of it there.
-        // Otherwise every position poll (~200ms) and track poll (~2s)
-        // steals time from the 16ms frame budget and shows up as a
-        // periodic micro-stutter in the continuous waveform.
-        // Color hot-reload: an external config edit applies within a
-        // second, no restart needed. In jefetch mode the logo_colors file
-        // can also change under us (new logo), so re-resolve it here too —
-        // bars, lyrics text and the published state all follow together.
         if last_color_check.elapsed() >= Duration::from_millis(1000) {
             last_color_check = Instant::now();
             if let Ok(meta) = std::fs::metadata(&save_path) {
                 if let Ok(mtime) = meta.modified() {
                     let stamp = (mtime, meta.len());
                     if last_color_stamp.as_ref() != Some(&stamp) {
-                        if last_color_stamp.is_some()
-                            && crate::config::reload_colors(&mut cfg, &save_path)
-                        {
+                        if last_color_stamp.is_none() {
+                            last_color_stamp = Some(stamp);
+                        } else if crate::config::reload_colors(&mut cfg, &save_path) {
                             apply_colors(&mut rnd, &cfg);
                             force_draw = true;
+                            last_color_stamp = Some(stamp);
                         }
-                        last_color_stamp = Some(stamp);
                     }
                 }
             }
@@ -1009,8 +1014,7 @@ fn main() {
                 },
             );
         } else {
-            // Keep poll timers from going stale so switching back to lyrics
-            // mode refreshes immediately instead of acting on old data.
+
             last_track_poll = Instant::now();
             last_pos_poll = Instant::now();
         }
@@ -1042,8 +1046,7 @@ fn main() {
 
         let mut need_draw = force_draw || in_settings;
         if !need_draw {
-            // Lyrics are static (not audio-visualized): redraw only when
-            // the lyric content changes (force_draw), not on audio levels.
+
             if rnd.mode == RenderMode::Bars
             {
                 for i in 0..pcl {
@@ -1112,13 +1115,7 @@ fn main() {
             thread::sleep(until);
             next = next.checked_add(frame_dur).unwrap_or_else(Instant::now);
         } else {
-            // Frame overran (slow draw, blocking poll, scheduling hitch):
-            // drop the backlog and schedule the next frame from now.
-            // The old code advanced `next` by exactly one frame, so a
-            // single 200ms stall left `next` far in the past and the loop
-            // then spun with no sleep trying to "catch up" - a burst of
-            // back-to-back draws that looks like a stutter, worst in wave
-            // mode which redraws every frame.
+
             next = Instant::now().checked_add(frame_dur).unwrap_or_else(Instant::now);
         }
 
@@ -1137,8 +1134,6 @@ fn main() {
         }
     }
 
-    // Plain launch+quit never touches the file; only real edits do (or a
-    // first run with no file yet, so defaults are kept next time).
     if cfg_dirty || !had_file {
         if !config_save(&cfg, &save_path) {
             eprintln!("sharkvis: could not save config to {}", save_path);
@@ -1158,9 +1153,6 @@ fn main() {
 
     audio.stop();
 
-    // No live producer anymore: remove the state file so consumers (e.g.
-    // `jefetch --static`) fall back to their own colors instead of showing
-    // our last frozen frame.
     state::clear_state_file();
 
     std::process::exit(rc);

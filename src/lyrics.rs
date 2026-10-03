@@ -220,8 +220,7 @@ pub(crate) fn json_string(src: &str, key: &str) -> Option<String> {
         return None;
     }
     rest = rest.strip_prefix('"')?;
-    // Raw bytes, decoded once at the end: pushing each byte as a char would
-    // double-encode multibyte UTF-8 (mojibake in lyrics).
+
     let mut o: Vec<u8> = Vec::new();
     let mut it = rest.bytes();
     while let Some(b) = it.next() {
@@ -230,6 +229,8 @@ pub(crate) fn json_string(src: &str, key: &str) -> Option<String> {
                 b'n' => o.push(b'\n'),
                 b'r' => o.push(b'\r'),
                 b't' => o.push(b'\t'),
+                b'b' => o.push(0x08),
+                b'f' => o.push(0x0c),
                 b'"' => o.push(b'"'),
                 b'\\' => o.push(b'\\'),
                 b'/' => o.push(b'/'),
@@ -238,8 +239,32 @@ pub(crate) fn json_string(src: &str, key: &str) -> Option<String> {
                     if h.len() < 4 {
                         return None;
                     }
-                    let cp = u32::from_str_radix(std::str::from_utf8(&h).ok()?, 16).ok()?;
-                    let ch = char::from_u32(cp)?;
+                    let mut cp = u32::from_str_radix(std::str::from_utf8(&h).ok()?, 16).ok()?;
+
+                    if (0xD800..0xDC00).contains(&cp) {
+                        let mut peek = it.clone();
+                        if peek.next() == Some(b'\\') && peek.next() == Some(b'u') {
+                            let lo_h: Vec<u8> = peek.take(4).collect();
+                            if lo_h.len() == 4 {
+                                if let Ok(lo) = u32::from_str_radix(
+                                    std::str::from_utf8(&lo_h).unwrap_or(""),
+                                    16,
+                                ) {
+                                    if (0xDC00..0xE000).contains(&lo) {
+                                        cp = 0x10000
+                                            + ((cp - 0xD800) << 10)
+                                            + (lo - 0xDC00);
+                                        it.next();
+                                        it.next();
+                                        for _ in 0..4 {
+                                            it.next();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
                     let mut enc = [0u8; 4];
                     o.extend_from_slice(ch.encode_utf8(&mut enc).as_bytes());
                 }
@@ -1277,12 +1302,21 @@ mod tests {
 
     #[test]
     fn json_string_keeps_multibyte_utf8() {
-        // Regression: pushing each byte as a char double-encodes multibyte
-        // sequences (mojibake in lyrics).
+
         let body = r#"{"t":"caf\u00e9 \u4e2d\u6587"}"#;
         assert_eq!(json_string(body, "t"), Some("café 中文".to_string()));
         let raw = "{\"t\":\"caf\u{00e9}\"}";
         assert_eq!(json_string(raw, "t"), Some("café".to_string()));
+    }
+
+    #[test]
+    fn json_string_escapes_and_surrogates() {
+        let body = r#"{"t":"a\bb\fc"}"#;
+        assert_eq!(json_string(body, "t"), Some("a\x08b\x0cc".to_string()));
+        let body = r#"{"t":"\uD83C\uDFB5"}"#;
+        assert_eq!(json_string(body, "t"), Some("\u{1F3B5}".to_string()));
+        let body = r#"{"t":"x\uD83Cy"}"#;
+        assert_eq!(json_string(body, "t"), Some("x\u{FFFD}y".to_string()));
     }
 
     #[test]

@@ -75,8 +75,6 @@ fn clamp_d(v: f64, lo: f64, hi: f64) -> f64 {
     v.max(lo).min(hi)
 }
 
-/// Colors preset style: 0 = custom pair, 1 = jefetch.
-/// First whitespace/comma-separated token decides, case-insensitive.
 fn colors_style(cfg: &Config) -> u8 {
     let tok: String = cfg
         .colors
@@ -251,7 +249,7 @@ impl SettingsUi {
                 *changed |= CH_LAYOUT;
             }
             S_MODE => {
-                // Old "text" mode name maps to "lyrics".
+
                 if cfg.mode == "text" {
                     cfg.mode = "lyrics".to_string();
                 }
@@ -348,9 +346,7 @@ impl SettingsUi {
             "bars" => rows.extend_from_slice(&[
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
-            // Lyrics are not audio-visualized, so no DSP tuning rows here.
-            // "text" is the old mode name, kept so old configs still
-            // show the lyrics rows.
+
             "lyrics" | "text" => {
                 rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_PROVIDER, S_OFFSET])
             }
@@ -618,7 +614,7 @@ mod tests {
         let lyr = rows_for("lyrics");
         assert!(lyr.contains(&S_TEXTSIZE) && lyr.contains(&S_PROVIDER) && lyr.contains(&S_OFFSET));
         assert!(!lyr.contains(&S_SENS) && !lyr.contains(&S_BARS) && !lyr.contains(&S_CHARSET));
-        // Old mode name still resolves to the lyrics rows.
+
         assert_eq!(rows_for("text"), lyr);
         let unknown = rows_for("ai");
         assert!(!unknown.contains(&S_BARS) && !unknown.contains(&S_TEXTSIZE));

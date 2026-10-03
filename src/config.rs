@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 pub const PALETTE: &[(&str, &str)] = &[
@@ -163,8 +162,6 @@ pub fn config_default_path() -> String {
     "./config.jsonc".to_string()
 }
 
-/// Named color or hex to RGB, mirroring the C resolver (palette names,
-/// grey/bright_* approximations, #rrggbb or bare rrggbb).
 pub fn color_to_rgb_any(s: &str) -> Option<(u32, u32, u32)> {
     let t = s.trim();
     if t.is_empty() {
@@ -194,8 +191,6 @@ pub fn color_to_rgb_any(s: &str) -> Option<(u32, u32, u32)> {
     parse_hex_rgb(approx.as_bytes())
 }
 
-/// Strip `//...` and `/*...*/` comments, string-aware so `//` inside
-/// quoted values (paths, charsets) survives.
 fn strip_jsonc_comments(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut it = s.chars().peekable();
@@ -268,8 +263,6 @@ fn jbool(v: &serde_json::Value, cur: bool) -> bool {
     cur
 }
 
-/// `colors` style shortcut applied over the loaded gradients: empty is a
-/// no-op, one valid color goes solid, a `low,high` pair sets both ends.
 fn apply_color_value(cfg: &mut Config, color: &serde_json::Value) {
     if let Some(s) = color.get("color_mode").and_then(|v| v.as_str()) {
         if s == "256" || s == "indexed" {
@@ -305,8 +298,6 @@ fn apply_color_value(cfg: &mut Config, color: &serde_json::Value) {
     apply_colors_style(cfg);
 }
 
-/// Re-read only the color section (hot-reload poll). Returns false when
-/// the file is unreadable or has no color section.
 pub fn reload_colors(cfg: &mut Config, path: &str) -> bool {
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
@@ -364,16 +355,16 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
     }
     if let Some(general) = root.get("general") {
         if let Some(v) = general.get("bars") {
-            cfg.bars = jint(v, cfg.bars as i64) as usize;
+            cfg.bars = jint(v, cfg.bars as i64).clamp(0, 256) as usize;
         }
         if let Some(v) = general.get("bar_width") {
-            cfg.bar_width = jint(v, cfg.bar_width as i64) as usize;
+            cfg.bar_width = jint(v, cfg.bar_width as i64).clamp(1, 8) as usize;
         }
         if let Some(v) = general.get("bar_spacing") {
-            cfg.bar_spacing = jint(v, cfg.bar_spacing as i64) as usize;
+            cfg.bar_spacing = jint(v, cfg.bar_spacing as i64).clamp(0, 4) as usize;
         }
         if let Some(v) = general.get("framerate") {
-            cfg.framerate = jint(v, cfg.framerate as i64) as u32;
+            cfg.framerate = jint(v, cfg.framerate as i64).clamp(1, 240) as u32;
         }
         if let Some(v) = general.get("sensitivity") {
             if let Some(f) = v.as_f64() {
@@ -384,10 +375,16 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             cfg.autosens = jbool(v, cfg.autosens);
         }
         if let Some(v) = general.get("lower_cutoff_freq") {
-            cfg.lower_cutoff = jint(v, cfg.lower_cutoff as i64) as u32;
+            cfg.lower_cutoff = jint(v, cfg.lower_cutoff as i64).clamp(1, 24000) as u32;
         }
         if let Some(v) = general.get("higher_cutoff_freq") {
-            cfg.higher_cutoff = jint(v, cfg.higher_cutoff as i64) as u32;
+            cfg.higher_cutoff = jint(v, cfg.higher_cutoff as i64).clamp(2, 24000) as u32;
+        }
+        if cfg.higher_cutoff <= cfg.lower_cutoff {
+            cfg.higher_cutoff = cfg.lower_cutoff.saturating_add(1).clamp(2, 24000);
+            if cfg.higher_cutoff <= cfg.lower_cutoff {
+                cfg.lower_cutoff = cfg.higher_cutoff.saturating_sub(1).max(1);
+            }
         }
     }
     if let Some(v) = root
@@ -412,10 +409,10 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             }
         }
         if let Some(v) = input.get("sample_rate") {
-            cfg.sample_rate = jint(v, cfg.sample_rate as i64) as u32;
+            cfg.sample_rate = jint(v, cfg.sample_rate as i64).clamp(8000, 192000) as u32;
         }
         if let Some(v) = input.get("channels") {
-            cfg.channels = jint(v, cfg.channels as i64) as u32;
+            cfg.channels = jint(v, cfg.channels as i64).clamp(1, 2) as u32;
         }
     }
     if let Some(lyrics) = root.get("lyrics") {
@@ -438,7 +435,7 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             } else if s == "lyrics" {
                 cfg.mode = "lyrics".to_string();
             } else if s == "text" {
-                // Old name for the lyrics mode.
+
                 cfg.mode = "lyrics".to_string();
             }
         }
@@ -484,8 +481,6 @@ fn mkdir_p(path: &Path) {
     }
 }
 
-/// JSON string escaping matching the C writer: \" \\ \b \f \n \r \t and
-/// \u00xx for other controls, raw UTF-8 otherwise.
 fn json_escape_into(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
@@ -514,10 +509,6 @@ fn json_escape(s: &str) -> String {
 
 pub fn config_save(cfg: &Config, path: &str) -> bool {
     mkdir_p(Path::new(path));
-    let mut f = match fs::File::create(path) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("    \"general\": {\n");
@@ -581,9 +572,7 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     ));
     out.push_str(&format!("        \"offset_ms\": {},\n", cfg.lyric_offset_ms));
     out.push_str("        \"chars\": \"");
-    // Byte-faithful: the charset is raw bytes, not UTF-8 text. Pushing each
-    // byte as a char would re-encode values >= 0x80 (mojibake). Escape only
-    // the JSON metacharacters, drop ASCII controls, pass the rest through.
+
     {
         let mut esc = Vec::with_capacity(cfg.chars.len() + 2);
         for &ch in &cfg.chars {
@@ -611,8 +600,15 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     ));
     out.push_str("    }\n");
     out.push_str("}\n");
-    let _ = f.write_all(out.as_bytes());
-    drop(f);
+    let tmp = format!("{}.tmp", path);
+    if fs::write(&tmp, out.as_bytes()).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return false;
+    }
+    if fs::rename(&tmp, path).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return false;
+    }
     true
 }
 #[cfg(test)]
@@ -663,7 +659,7 @@ mod tests {
         assert_eq!(c.sample_rate, 44100);
         assert_eq!(c.channels, 1);
         assert!(c.color_256);
-        // colors=jefetch leaves file gradients alone
+
         assert_eq!(c.gradient_low, "red");
         assert_eq!(c.gradient_high, "#00ff00");
         assert_eq!(c.colors, "jefetch");
@@ -695,7 +691,7 @@ mod tests {
         assert!(config_save(&c, &ps));
         let mut c2 = Config::default();
         assert!(config_load(&mut c2, &ps));
-        // jefetch style leaves file gradients alone on every load
+
         assert_eq!(c2.gradient_low, "red");
         assert_eq!(c2.gradient_high, "#00ff00");
         assert_eq!(c2.colors, "jefetch");
@@ -707,8 +703,7 @@ mod tests {
 
     #[test]
     fn jsonc_roundtrip_keeps_multibyte_chars_byte_identical() {
-        // Regression: pushing each byte as a char re-encodes values >= 0x80
-        // (mojibake). The file must hold the exact block-element bytes.
+
         let mut c = Config::default();
         c.chars = "▁▂▃▄▅▆▇█".as_bytes().to_vec();
         let path =
@@ -741,6 +736,32 @@ mod tests {
         assert_eq!(c.gradient_low, "ffffff");
         std::fs::write(&path, "[1,2]").unwrap();
         assert!(!config_load(&mut c, &ps));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn out_of_range_values_are_clamped() {
+        let text = r#"{
+            "general": {
+                "bars": -5, "bar_width": 100, "bar_spacing": -3,
+                "framerate": -10, "lower_cutoff_freq": -50,
+                "higher_cutoff_freq": 1
+            },
+            "input": {"sample_rate": 0, "channels": 9}
+        }"#;
+        let path =
+            std::env::temp_dir().join(format!("sharkvis-clamp-{}.jsonc", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let mut c = Config::default();
+        assert!(config_load(&mut c, path.to_str().unwrap()));
+        assert_eq!(c.bars, 0);
+        assert_eq!(c.bar_width, 8);
+        assert_eq!(c.bar_spacing, 0);
+        assert_eq!(c.framerate, 1);
+        assert_eq!(c.sample_rate, 8000);
+        assert_eq!(c.channels, 2);
+        assert!(c.lower_cutoff >= 1 && c.higher_cutoff > c.lower_cutoff);
+        assert!(c.higher_cutoff <= 24000);
         let _ = std::fs::remove_file(&path);
     }
 

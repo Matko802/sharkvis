@@ -110,8 +110,7 @@ impl<'a> Reader<'a> {
         Ok(b)
     }
     fn byte_name(b: u8) -> String {
-        // Protocol bytes are ASCII tags; show anything else as hex so error
-        // strings never carry mojibake.
+
         if b.is_ascii_graphic() || b == b' ' {
             format!("'{}'", b as char)
         } else {
@@ -223,7 +222,10 @@ fn read_interruptible(mut sock: &UnixStream, out: &mut [u8], stop: &AtomicBool) 
             Ok(0) => return Err("pulse: server closed the connection".into()),
             Ok(n) => got += n,
             Err(e) => {
-                if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted {
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::Interrupted
+                {
                     continue;
                 }
                 return Err(format!("pulse: read: {e}"));
@@ -293,6 +295,8 @@ impl Pulse {
         for path in server_candidates() {
             match UnixStream::connect(&path) {
                 Ok(sock) => {
+
+                    let _ = sock.set_read_timeout(Some(std::time::Duration::from_millis(50)));
                     let mut p = Pulse { sock, tag: 0 };
                     p.auth()?;
                     p.set_client_name()?;
@@ -347,7 +351,11 @@ impl Pulse {
 
     fn reply_for(&mut self, want: u32) -> Result<Vec<u8>, String> {
         let idle = AtomicBool::new(false);
+        let start = std::time::Instant::now();
         loop {
+            if start.elapsed() > std::time::Duration::from_millis(2000) {
+                return Err("pulse: reply timeout".into());
+            }
             match self.read_frame(&idle)? {
                 Some(Frame::Packet(payload)) => {
                     let (cmd, tag, rest) = parse_header(&payload)?;
@@ -362,7 +370,8 @@ impl Pulse {
                         }
                     }
                 }
-                Some(Frame::Data(_, _)) | None => {}
+                Some(Frame::Data(_, _)) => {}
+                None => return Err("pulse: server closed the connection".into()),
             }
         }
     }

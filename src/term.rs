@@ -43,6 +43,9 @@ pub fn term_cell_aspect(fd: RawFd) -> f64 {
 }
 
 pub fn term_raw_enter(fd: RawFd) -> bool {
+    if HAVE_SAVED.load(Ordering::Acquire) {
+        return true;
+    }
     let mut t: libc::termios = unsafe { std::mem::zeroed() };
     if unsafe { libc::tcgetattr(fd, &mut t) } != 0 {
         return false;
@@ -59,7 +62,7 @@ pub fn term_raw_enter(fd: RawFd) -> bool {
 }
 
 pub fn term_raw_restore(fd: RawFd) {
-    if HAVE_SAVED.load(Ordering::Acquire) {
+    if HAVE_SAVED.swap(false, Ordering::SeqCst) {
         unsafe {
             let p = std::ptr::addr_of!(SAVED).cast::<libc::termios>();
             libc::tcsetattr(fd, libc::TCSANOW, p);

@@ -46,7 +46,7 @@ pub(crate) fn cmd_out(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<Strin
             use std::io::Read;
             let mut buf = Vec::new();
             if let Some(o) = child.stdout.take() {
-                let _ = o.take(64 * 1024).read_to_end(&mut buf);
+                let _ = o.take(4 * 1024 * 1024).read_to_end(&mut buf);
             }
             let _ = child.wait();
             buf
@@ -96,6 +96,7 @@ fn playing_player(allow: &[String]) -> Option<String> {
     let list = cmd_out("playerctl", &["-l"], 500)?;
     let mut names: Vec<&str> = list.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
     names.sort_by_key(|p| if *p == "playerctld" { 0 } else { 1 });
+    let mut paused_fallback = None;
     for p in names {
         if !allow.is_empty() && !allow.iter().any(|a| p == a || p.starts_with(a)) {
             continue;
@@ -104,9 +105,12 @@ fn playing_player(allow: &[String]) -> Option<String> {
             if st.eq_ignore_ascii_case("playing") {
                 return Some(p.to_string());
             }
+            if paused_fallback.is_none() && st.eq_ignore_ascii_case("paused") {
+                paused_fallback = Some(p.to_string());
+            }
         }
     }
-    None
+    paused_fallback
 }
 
 fn fill_meta(t: &mut Track, player: &str) {

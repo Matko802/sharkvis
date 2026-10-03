@@ -155,8 +155,7 @@ fn parse_string(p: &mut Parser) -> Option<String> {
         return None;
     }
     p.pos += 1;
-    // Raw bytes: pushing each byte as a char would double-encode multibyte
-    // UTF-8 (mojibake in lyrics). Buffer bytes, decode once at the end.
+
     let mut o: Vec<u8> = Vec::new();
     while let Some(&c) = p.b.get(p.pos) {
         match c {
@@ -170,6 +169,8 @@ fn parse_string(p: &mut Parser) -> Option<String> {
                     Some(b'n') => o.push(b'\n'),
                     Some(b'r') => o.push(b'\r'),
                     Some(b't') => o.push(b'\t'),
+                    Some(b'b') => o.push(0x08),
+                    Some(b'f') => o.push(0x0c),
                     Some(b'"') => o.push(b'"'),
                     Some(b'\\') => o.push(b'\\'),
                     Some(b'/') => o.push(b'/'),
@@ -178,11 +179,30 @@ fn parse_string(p: &mut Parser) -> Option<String> {
                             return None;
                         }
                         let h = std::str::from_utf8(&p.b[p.pos + 1..p.pos + 5]).ok()?;
-                        let cp = u32::from_str_radix(h, 16).ok()?;
-                        let ch = char::from_u32(cp)?;
+                        let mut cp = u32::from_str_radix(h, 16).ok()?;
+                        p.pos += 4;
+
+                        if (0xD800..0xDC00).contains(&cp)
+                            && p.pos + 7 <= p.b.len()
+                            && p.b[p.pos + 1] == b'\\'
+                            && p.b[p.pos + 2] == b'u'
+                        {
+                            if let Ok(lo_h) =
+                                std::str::from_utf8(&p.b[p.pos + 3..p.pos + 7])
+                            {
+                                if let Ok(lo) = u32::from_str_radix(lo_h, 16) {
+                                    if (0xDC00..0xE000).contains(&lo) {
+                                        cp = 0x10000
+                                            + ((cp - 0xD800) << 10)
+                                            + (lo - 0xDC00);
+                                        p.pos += 6;
+                                    }
+                                }
+                            }
+                        }
+                        let ch = char::from_u32(cp).unwrap_or('\u{FFFD}');
                         let mut enc = [0u8; 4];
                         o.extend_from_slice(ch.encode_utf8(&mut enc).as_bytes());
-                        p.pos += 4;
                     }
                     _ => return None,
                 }
@@ -300,7 +320,7 @@ fn save_disk_token(token: &str) {
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, format!("{{\"user_token\":{}}}", crate::lyrics::json_escape(token)));
+    let _ = std::fs::write(&path, format!("{{\"user_token\":\"{}\"}}", crate::lyrics::json_escape(token)));
 }
 
 fn clear_disk_token() {
@@ -651,10 +671,38 @@ mod tests {
 
     #[test]
     fn json_strings_keep_multibyte_utf8() {
-        // Regression: pushing each byte as a char double-encodes multibyte
-        // sequences (mojibake in lyrics).
+
         let v = parse_json("\"caf\u{00e9} \\u4e2d\\u6587\"").expect("parse");
         assert_eq!(v.as_str(), Some("café 中文"));
+    }
+
+    #[test]
+    fn json_string_escapes_and_surrogates() {
+        let v = parse_json("\"a\\bb\\fc\"").expect("parse");
+        assert_eq!(v.as_str(), Some("a\x08b\x0cc"));
+
+        let v = parse_json("\"\\uD83C\\uDFB5\"").expect("pair");
+        assert_eq!(v.as_str(), Some("\u{1F3B5}"));
+
+        let v = parse_json("\"x\\uD83Cy\"").expect("lone");
+        assert_eq!(v.as_str(), Some("x\u{FFFD}y"));
+    }
+
+    #[test]
+    fn disk_token_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("sharkvis-tok-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let prev = std::env::var_os("XDG_CACHE_HOME");
+        std::env::set_var("XDG_CACHE_HOME", &dir);
+        save_disk_token("abc123");
+        assert_eq!(load_disk_token().as_deref(), Some("abc123"));
+        let _ = std::fs::remove_file(dir.join("sharkvis/musixmatch_token.json"));
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Some(v) = prev {
+            std::env::set_var("XDG_CACHE_HOME", v);
+        } else {
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
     }
 
     #[test]
