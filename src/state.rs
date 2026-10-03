@@ -62,13 +62,13 @@ impl StateWriter {
                 self.dir_ready = true;
             }
         }
-        let (r, g, b) = if grad_amt < 100 {
-
-            let levels = grad_amt.max(1) as f64;
-            let tq = (e as f64).clamp(0.0, 1.0);
-            lerp_rgb(low, high, (tq * levels).floor() as f32 / levels as f32)
+        let amt = grad_amt.clamp(1, 256);
+        let (r, g, b) = if amt <= 1 {
+            low
         } else {
-            lerp_rgb(low, high, e as f32)
+            let n = amt as f64;
+            let tq = (e as f64).clamp(0.0, 1.0);
+            lerp_rgb(low, high, ((tq * n).floor().min(n - 1.0) / (n - 1.0)) as f32)
         };
         let (lr, lg, lb) = low;
         let (hr, hg, hb) = high;
@@ -81,9 +81,9 @@ impl StateWriter {
             String::new()
         };
         let body = format!(
-            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2} started={} pid={}{}\n",
+            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2} gradient={} started={} pid={}{}\n",
             r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr,
-            self.started_ms, self.pid, sens_field
+            amt, self.started_ms, self.pid, sens_field
         );
 
         if !self.custom {
@@ -715,6 +715,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("color_low=#0000ff"), "complete body, got {}", text);
         assert!(text.contains("color_high=#ff0000"), "complete body, got {}", text);
+        assert!(text.contains("gradient=100"), "count published, got {}", text);
         assert!(
             !std::path::Path::new(&format!("{}.tmp", path)).exists(),
             "no temp leftovers"

@@ -382,6 +382,12 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.sample_rate > 192000 {
         cfg.sample_rate = 192000;
     }
+    if cfg.gradient_amt < 1 {
+        cfg.gradient_amt = 1;
+    }
+    if cfg.gradient_amt > 256 {
+        cfg.gradient_amt = 256;
+    }
     if cfg.channels < 1 {
         cfg.channels = 1;
     }

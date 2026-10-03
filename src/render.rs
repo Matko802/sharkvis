@@ -178,8 +178,12 @@ impl Renderer {
             0.0
         };
 
-        let levels = self.grad_amt.clamp(1, 100) as f64;
-        frac = (frac * levels).floor() / levels;
+        let n = self.grad_amt.clamp(1, 256) as f64;
+        frac = if n <= 1.0 {
+            0.0
+        } else {
+            (frac * n).floor().min(n - 1.0) / (n - 1.0)
+        };
         let mut cr = (lo_r as f64 + (hi_r as f64 - lo_r as f64) * frac + 0.5) as u32;
         let mut cg = (lo_g as f64 + (hi_g as f64 - lo_g as f64) * frac + 0.5) as u32;
         let mut cb = (lo_b as f64 + (hi_b as f64 - lo_b as f64) * frac + 0.5) as u32;

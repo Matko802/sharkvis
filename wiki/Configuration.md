@@ -65,6 +65,7 @@ players = firefox,spotify
 |-----|-------|
 | `color_mode` | `"24bit"` or `"256"` |
 | `gradient_low` / `gradient_high` | Hex colors, low end to high end |
+| `gradient` | How many distinct colors the blend may use, `1`–`256` |
 
 ## Visualizer
 
@@ -124,7 +125,7 @@ per second to `$XDG_RUNTIME_DIR/sharkvis/state` (fallback
 [jefetch](https://github.com/Matko802/jefetch) follow instantly:
 
 ```text
-color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45 started=1757917315000 pid=1234
+color=#ff8800 energy=0.42 beat=1.00 color_low=#ffff00 color_high=#ff0000 bass=0.60 left=0.40 right=0.45 gradient=100 started=1757917315000 pid=1234
 ```
 
 Each instance also writes its own `state-<pid>` file next to it, stamped

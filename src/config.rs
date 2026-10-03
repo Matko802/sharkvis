@@ -289,7 +289,7 @@ fn apply_color_value(cfg: &mut Config, color: &serde_json::Value) {
         }
     }
     if let Some(v) = color.get("gradient") {
-        cfg.gradient_amt = jint(v, cfg.gradient_amt as i64).clamp(0, 100) as u32;
+        cfg.gradient_amt = jint(v, cfg.gradient_amt as i64).clamp(1, 256) as u32;
     }
     apply_colors_style(cfg);
 }

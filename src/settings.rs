@@ -190,7 +190,7 @@ impl SettingsUi {
                 }
             }
             S_GRAD => {
-                let v = clamp_l(cfg.gradient_amt as i64 + dir * 5, 0, 100);
+                let v = clamp_l(cfg.gradient_amt as i64 + dir, 1, 256);
                 if v as u32 != cfg.gradient_amt {
                     cfg.gradient_amt = v as u32;
                     *changed |= CH_LAYOUT;
