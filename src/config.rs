@@ -587,13 +587,20 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     ));
     out.push_str(&format!("        \"offset_ms\": {},\n", cfg.lyric_offset_ms));
     out.push_str("        \"chars\": \"");
-    for &ch in &cfg.chars {
-        if ch == b'"' || ch == b'\\' {
-            out.push('\\');
+    // Byte-faithful: the charset is raw bytes, not UTF-8 text. Pushing each
+    // byte as a char would re-encode values >= 0x80 (mojibake). Escape only
+    // the JSON metacharacters, drop ASCII controls, pass the rest through.
+    {
+        let mut esc = Vec::with_capacity(cfg.chars.len() + 2);
+        for &ch in &cfg.chars {
+            if ch == b'"' || ch == b'\\' {
+                esc.push(b'\\');
+            }
+            if ch >= 0x20 {
+                esc.push(ch);
+            }
         }
-        if ch >= 0x20 {
-            out.push(ch as char);
-        }
+        out.push_str(&String::from_utf8_lossy(&esc));
     }
     out.push_str("\"\n");
     out.push_str("    },\n");
@@ -701,6 +708,31 @@ mod tests {
         assert_eq!(c2.gradient_amt, 42);
         assert_eq!(c2.method, "auto");
         assert_eq!(c2.chars, "x\"y\\z".as_bytes());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn jsonc_roundtrip_keeps_multibyte_chars_byte_identical() {
+        // Regression: pushing each byte as a char re-encodes values >= 0x80
+        // (mojibake). The file must hold the exact block-element bytes.
+        let mut c = Config::default();
+        c.chars = "▁▂▃▄▅▆▇█".as_bytes().to_vec();
+        let path =
+            std::env::temp_dir().join(format!("sharkvis-rtuni-{}.jsonc", std::process::id()));
+        let ps = path.to_string_lossy().into_owned();
+        assert!(config_save(&c, &ps));
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            raw.windows(3).any(|w| w == "▁".as_bytes()),
+            "block bytes must survive the save"
+        );
+        assert!(
+            !raw.contains(&0xC3),
+            "no double-encoded bytes (0xC3 appears only via mojibake here)"
+        );
+        let mut c2 = Config::default();
+        assert!(config_load(&mut c2, &ps));
+        assert_eq!(c2.chars, "▁▂▃▄▅▆▇█".as_bytes());
         let _ = std::fs::remove_file(&path);
     }
 
