@@ -15,7 +15,7 @@
         { pkgs }:
         pkgs.rustPlatform.buildRustPackage {
           pname = "sharkvis";
-          version = "0.1.0";
+          version = "3.0.0";
           src = pkgs.lib.cleanSource ./.;
           cargoLock.lockFile = ./Cargo.lock;
           meta = {
