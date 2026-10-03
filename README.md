@@ -4,7 +4,7 @@
 
 # sharkvis
 
-Linux only audio visualizer, now in Rust
+Linux only audio visualizer, now in C
 
 Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer) also [LyricsMPRIS-Rust](https://github.com/BEST8OY/LyricsMPRIS-Rust)
 
@@ -12,10 +12,13 @@ Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https:
 
 ## Features
 
-- PulseAudio / PipeWire support
-- Autosensitivity, smoothing, adjustable cutoffs
-- Synced lyrics mode
-- integrated with [jefetch](https://github.com/Matko802/jefetch)
+PulseAudio and PipeWire support,
+autosensitivity, smoothing, adjustable cutoffs, lyrics
+integration with [jefetch](https://github.com/Matko802/jefetch)
+
+## AI disclosure
+Project 99% made by opencode free models 
+so maybe don't use this if you don't support ai
 
 ## Building
 
@@ -26,11 +29,19 @@ make deps
 make
 sudo make install
 ```
-## Updating it
+### Updating it
 
 ```sh
 cd sharkvis && git pull && sudo make install
 ```
+
+## Arch
+```sh
+git clone https://github.com/Matko802/sharkvis.git
+cd sharkvis
+makepkg -si
+```
+
 ## Usage
 
 <div align="center">
@@ -49,7 +60,7 @@ sharkvis -h
 | `q` / `Ctrl-C` | quit |
 
 The config file is looked up in `$SHARKVIS_CONFIG`, then
-`~/.config/sharkvis/config.toml`, then `./config.toml`
+`~/.config/sharkvis/config.jsonc`, then `./config.jsonc`
 
 ## Updating
 
