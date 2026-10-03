@@ -19,7 +19,7 @@ const S_AUTO: usize = 6;
 const S_NOISE: usize = 7;
 const S_LOW: usize = 8;
 const S_HIGH: usize = 9;
-const S_CMODE: usize = 10;
+const S_GRAD: usize = 10;
 const S_GHI: usize = 11;
 const S_GLO: usize = 12;
 const S_RATE: usize = 13;
@@ -29,7 +29,8 @@ const S_TEXTSIZE: usize = 16;
 const S_STYLE: usize = 17;
 const S_PROVIDER: usize = 18;
 const S_OFFSET: usize = 19;
-const S_COUNT: usize = 20;
+const S_COLORS: usize = 20;
+const S_COUNT: usize = 21;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -44,7 +45,7 @@ const LABELS: [&str; S_COUNT] = [
     "smoothing",
     "lower cutoff",
     "upper cutoff",
-    "color mode",
+    "gradient",
     "color high",
     "color low",
     "sample rate",
@@ -54,6 +55,7 @@ const LABELS: [&str; S_COUNT] = [
     "lyrics style",
     "provider",
     "offset ms",
+    "colors",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -72,6 +74,37 @@ fn clamp_l(v: i64, lo: i64, hi: i64) -> i64 {
 fn clamp_d(v: f64, lo: f64, hi: f64) -> f64 {
     v.max(lo).min(hi)
 }
+
+/// Colors preset style: 0 = custom pair, 1 = sharkvis, 2 = jefetch.
+/// First whitespace/comma-separated token decides, case-insensitive.
+fn colors_style(cfg: &Config) -> u8 {
+    let tok: String = cfg
+        .colors
+        .trim_start()
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != ',')
+        .collect();
+    let low = tok.to_ascii_lowercase();
+    if low == "jefetch" {
+        2
+    } else if low == "sharkvis" {
+        1
+    } else {
+        0
+    }
+}
+
+struct ColorsStash {
+    custom: String,
+    lo: String,
+    hi: String,
+}
+
+static COLORS_STASH: std::sync::Mutex<ColorsStash> = std::sync::Mutex::new(ColorsStash {
+    custom: String::new(),
+    lo: String::new(),
+    hi: String::new(),
+});
 
 pub struct SettingsUi {
     sel: usize,
@@ -117,12 +150,14 @@ impl SettingsUi {
                 let v = clamp_l(cfg.framerate as i64 + dir * 5, 5, 240);
                 if v as u32 != cfg.framerate {
                     cfg.framerate = v as u32;
+                    *changed |= CH_LAYOUT;
                 }
             }
             S_SENS => {
                 let v = clamp_d(cfg.sensitivity + dir as f64 * 5.0, 5.0, 200.0);
                 if v != cfg.sensitivity {
                     cfg.sensitivity = v;
+                    *changed |= CH_LAYOUT;
                 }
             }
             S_AUTO => {
@@ -159,10 +194,10 @@ impl SettingsUi {
                     *changed |= CH_DSP;
                 }
             }
-            S_CMODE => {
-                let v = !cfg.color_256;
-                if v != cfg.color_256 {
-                    cfg.color_256 = v;
+            S_GRAD => {
+                let v = clamp_l(cfg.gradient_amt as i64 + dir * 5, 0, 100);
+                if v as u32 != cfg.gradient_amt {
+                    cfg.gradient_amt = v as u32;
                     *changed |= CH_LAYOUT;
                 }
             }
@@ -182,6 +217,52 @@ impl SettingsUi {
                     cfg.gradient_low = new;
                 } else {
                     cfg.gradient_high = new;
+                }
+                if colors_style(cfg) != 0 {
+                    cfg.colors.clear();
+                } else if !cfg.colors.is_empty() {
+                    cfg.colors = format!("{},{}", cfg.gradient_low, cfg.gradient_high);
+                }
+                *changed |= CH_LAYOUT;
+            }
+            S_COLORS => {
+                let cur = colors_style(cfg);
+                let next = (cur as i64 + dir).rem_euclid(3) as u8;
+                if next == 0 {
+                    let stash = COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
+                    if !stash.custom.is_empty() {
+                        cfg.colors = stash.custom.clone();
+                    } else {
+                        cfg.colors.clear();
+                    }
+                    if !stash.lo.is_empty() && !stash.hi.is_empty() {
+                        cfg.gradient_low = stash.lo.clone();
+                        cfg.gradient_high = stash.hi.clone();
+                    }
+                } else if next == 1 {
+                    if cur == 0 {
+                        let mut stash =
+                            COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
+                        if !cfg.colors.is_empty() {
+                            stash.custom = cfg.colors.clone();
+                        }
+                        stash.lo = cfg.gradient_low.clone();
+                        stash.hi = cfg.gradient_high.clone();
+                    }
+                    cfg.colors = "sharkvis".to_string();
+                    cfg.gradient_low = "blue".to_string();
+                    cfg.gradient_high = "purple".to_string();
+                } else {
+                    if cur == 0 {
+                        let mut stash =
+                            COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
+                        if !cfg.colors.is_empty() {
+                            stash.custom = cfg.colors.clone();
+                        }
+                        stash.lo = cfg.gradient_low.clone();
+                        stash.hi = cfg.gradient_high.clone();
+                    }
+                    cfg.colors = "jefetch".to_string();
                 }
                 *changed |= CH_LAYOUT;
             }
@@ -272,9 +353,14 @@ impl SettingsUi {
         *changed |= CH_LAYOUT | CH_DSP | CH_AUDIO;
     }
 
-    pub fn visible_rows(mode: &str) -> Vec<usize> {
-        let mut rows = vec![S_MODE, S_CMODE, S_GHI, S_GLO, S_FPS, S_RATE, S_CH];
-        match mode {
+    pub fn visible_rows(cfg: &Config) -> Vec<usize> {
+        let mut rows = vec![S_MODE, S_GRAD, S_COLORS];
+        if colors_style(cfg) != 2 {
+            rows.push(S_GHI);
+            rows.push(S_GLO);
+        }
+        rows.extend_from_slice(&[S_FPS, S_RATE, S_CH]);
+        match cfg.mode.as_str() {
             "bars" => rows.extend_from_slice(&[
                 S_BARS, S_BARW, S_SPACING, S_CHARSET, S_SENS, S_AUTO, S_NOISE, S_LOW, S_HIGH,
             ]),
@@ -291,7 +377,7 @@ impl SettingsUi {
     }
 
     fn nav_ids(cfg: &Config) -> Vec<usize> {
-        let mut ids = Self::visible_rows(cfg.mode.as_str());
+        let mut ids = Self::visible_rows(cfg);
         ids.push(S_RESET);
         ids
     }
@@ -363,7 +449,7 @@ impl SettingsUi {
         self.clamp_sel(cfg);
         panel_row(out, cap, 1, pw, "sharkvis settings", None, None);
         let mut y = 6;
-        for id in Self::visible_rows(cfg.mode.as_str()) {
+        for id in Self::visible_rows(cfg) {
             let val = format_value(cfg, id);
             panel_row(
                 out,
@@ -417,13 +503,12 @@ fn format_value(cfg: &Config, id: usize) -> String {
                 "off".to_string()
             }
         }
-        S_CMODE => {
-            if cfg.color_256 {
-                "256".to_string()
-            } else {
-                "24bit".to_string()
-            }
-        }
+        S_GRAD => format!("{}", cfg.gradient_amt),
+        S_COLORS => match colors_style(cfg) {
+            2 => "jefetch".to_string(),
+            1 => "sharkvis".to_string(),
+            _ => "custom".to_string(),
+        },
         S_GLO | S_GHI => {
             let hx = if id == S_GLO {
                 cfg.gradient_low.as_str()
@@ -533,30 +618,47 @@ mod tests {
 
     #[test]
     fn visible_rows_per_mode() {
-        let bars = SettingsUi::visible_rows("bars");
+        fn rows_for(mode: &str) -> Vec<usize> {
+            let mut cfg = Config::default();
+            cfg.mode = mode.to_string();
+            SettingsUi::visible_rows(&cfg)
+        }
+        let bars = rows_for("bars");
         assert!(bars.contains(&S_BARS) && bars.contains(&S_CHARSET) && bars.contains(&S_SENS));
         assert!(!bars.contains(&S_TEXTSIZE));
-        let wave = SettingsUi::visible_rows("wave");
+        assert!(bars.contains(&S_GRAD) && bars.contains(&S_COLORS));
+        let wave = rows_for("wave");
         assert!(!wave.contains(&S_BARS) && !wave.contains(&S_TEXTSIZE) && !wave.contains(&S_SENS));
         assert!(wave.contains(&S_MODE) && wave.contains(&S_FPS) && wave.contains(&S_RATE));
-        let scope = SettingsUi::visible_rows("oscilloscope");
+        let scope = rows_for("oscilloscope");
         assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXTSIZE));
-        let lyr = SettingsUi::visible_rows("lyrics");
+        let lyr = rows_for("lyrics");
         assert!(lyr.contains(&S_TEXTSIZE) && lyr.contains(&S_PROVIDER) && lyr.contains(&S_OFFSET));
         assert!(!lyr.contains(&S_SENS) && !lyr.contains(&S_BARS) && !lyr.contains(&S_CHARSET));
         // Old mode name still resolves to the lyrics rows.
-        assert_eq!(SettingsUi::visible_rows("text"), lyr);
-        let unknown = SettingsUi::visible_rows("ai");
+        assert_eq!(rows_for("text"), lyr);
+        let unknown = rows_for("ai");
         assert!(!unknown.contains(&S_BARS) && !unknown.contains(&S_TEXTSIZE));
         assert!(unknown.contains(&S_MODE) && unknown.contains(&S_FPS));
         for m in ["bars", "wave", "oscilloscope", "lyrics", "text", "bogus"] {
-            let mut v = SettingsUi::visible_rows(m);
+            let mut v = rows_for(m);
             let mut s = v.clone();
             s.sort_unstable();
             s.dedup();
             assert_eq!(v.len(), s.len(), "no dupes for {}", m);
             v = s;
         }
+    }
+
+    #[test]
+    fn jefetch_colors_hide_custom_gradient_rows() {
+        let mut cfg = Config::default();
+        cfg.mode = "bars".to_string();
+        assert!(SettingsUi::visible_rows(&cfg).contains(&S_GLO));
+        cfg.colors = "jefetch".to_string();
+        let rows = SettingsUi::visible_rows(&cfg);
+        assert!(!rows.contains(&S_GLO) && !rows.contains(&S_GHI));
+        assert!(rows.contains(&S_COLORS) && rows.contains(&S_GRAD));
     }
 
     #[test]

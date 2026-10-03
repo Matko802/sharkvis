@@ -28,6 +28,9 @@ pub struct Dsp {
     fft_interval: std::time::Duration,
     sens_step: u32,
     any_signal: bool,
+    /// Pre-gain peak (after EQ, before autosens): absolute level used for
+    /// state squelch so silence dust never publishes as signal.
+    raw_peak: f64,
 
     input_buffer: Vec<f64>,
     lower_cut_off: Vec<usize>,
@@ -50,6 +53,23 @@ pub struct Dsp {
 impl Dsp {
     pub fn render_frame_size(&self) -> usize {
         self.input_buffer_size
+    }
+
+    /// Pre-gain peak of the last frame (after EQ, before autosens).
+    pub fn raw_peak(&self) -> f64 {
+        self.raw_peak
+    }
+
+    /// Drop all buffered audio and smoothing state (audio reconnect).
+    /// Learned autosens gain is preserved.
+    pub fn flush(&mut self) {
+        self.input_buffer.fill(0.0);
+        self.cava_mem.fill(0.0);
+        self.cava_peak.fill(0.0);
+        self.cava_fall.fill(0.0);
+        self.prev_cava_out.fill(0.0);
+        self.raw_peak = 0.0;
+        self.any_signal = false;
     }
 
     fn pick_fft_size(rate: u32) -> usize {
@@ -172,7 +192,9 @@ impl Dsp {
 
         let mut eq = vec![0.0f64; number_of_bars];
         for n in 0..number_of_bars {
-            eq[n] = 1.0 / 2.0f64.powf(28.0);
+            // Absolute normalization: a full-scale sine reads ~1.0, flat
+            // down to zero, at any sample rate.
+            eq[n] = 1.0 / 2.0f64.powf(12.0);
             eq[n] *= cut_freq[n + 1].powf(0.85);
             // Gain calibration, independent of sample rate: FFT magnitudes
             // grow linearly with N (coherent gain) while a fixed-Hz band
@@ -210,6 +232,7 @@ impl Dsp {
             fft_interval: std::time::Duration::from_nanos(FFT_INTERVAL_NS),
             sens_step: 0,
             any_signal: false,
+            raw_peak: 0.0,
             input_buffer: vec![0.0; input_buffer_size],
             lower_cut_off: lower,
             upper_cut_off: upper,
@@ -280,6 +303,14 @@ impl Dsp {
             temp *= self.eq[n];
             cava_out[n] = temp;
         }
+
+        let mut peak = 0.0;
+        for n in 0..self.number_of_bars {
+            if cava_out[n] > peak {
+                peak = cava_out[n];
+            }
+        }
+        self.raw_peak = peak;
 
         if self.autosens {
             for n in 0..self.number_of_bars {

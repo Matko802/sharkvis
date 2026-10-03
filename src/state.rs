@@ -33,7 +33,7 @@ impl StateWriter {
         }
     }
 
-    pub fn update(&mut self, energy: f64, bass: f64, left: f64, right: f64, low: (u8, u8, u8), high: (u8, u8, u8)) {
+    pub fn update(&mut self, energy: f64, bass: f64, left: f64, right: f64, low: (u8, u8, u8), high: (u8, u8, u8), sens: f64, grad_amt: u32) {
         let now = Instant::now();
         let dt = self
             .last_tick
@@ -62,15 +62,30 @@ impl StateWriter {
                 self.dir_ready = true;
             }
         }
-        let (r, g, b) = lerp_rgb(low, high, e as f32);
+        let (r, g, b) = if grad_amt < 100 {
+            // Discrete gradient bands: quantize the blend position like the
+            // on-screen renderer so the published color steps with it.
+            let levels = grad_amt.max(1) as f64;
+            let tq = (e as f64).clamp(0.0, 1.0);
+            lerp_rgb(low, high, (tq * levels).floor() as f32 / levels as f32)
+        } else {
+            lerp_rgb(low, high, e as f32)
+        };
         let (lr, lg, lb) = low;
         let (hr, hg, hb) = high;
         let l = left.clamp(0.0, 1.0);
         let rr = right.clamp(0.0, 1.0);
+        // Learned autosens rides along so a restarted instance can resume at
+        // converged levels. Only finite, sane values; consumers ignore it.
+        let sens_field = if sens.is_finite() && sens > 0.0 && sens < 1e6 {
+            format!(" sens={:.6}", sens)
+        } else {
+            String::new()
+        };
         let body = format!(
-            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2} started={} pid={}\n",
+            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2} started={} pid={}{}\n",
             r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr,
-            self.started_ms, self.pid
+            self.started_ms, self.pid, sens_field
         );
         // Per-session file first (what new consumers follow), legacy
         // singleton second for older consumers. Same body both places.
@@ -81,6 +96,36 @@ impl StateWriter {
         }
         write_atomic(&path, body.as_bytes(), &mut self.dir_ready);
     }
+}
+
+/// Learned autosens of the last session, when its state file is still
+/// fresh (<30s). Same audio context is likely, so resuming at converged
+/// levels beats re-adapting from scratch. Returns `None` when unknown,
+/// stale, missing, or out of range.
+pub fn read_sens() -> Option<f64> {
+    if std::env::var_os("SHARKVIS_NO_STATE").is_some() {
+        return None;
+    }
+    let path = state_path();
+    let meta = std::fs::metadata(&path).ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(meta.modified().ok()?)
+        .ok()?;
+    if age > std::time::Duration::from_millis(30000) {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    for tok in text.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
+        if let Some(v) = tok.strip_prefix("sens=") {
+            if let Ok(f) = v.parse::<f64>() {
+                if f.is_finite() && f > 0.0 && f < 1e6 {
+                    return Some(f);
+                }
+                return None;
+            }
+        }
+    }
+    None
 }
 
 fn write_atomic(path: &str, body: &[u8], dir_ready: &mut bool) {
@@ -675,7 +720,7 @@ mod tests {
         std::env::set_var("SHARKVIS_NO_STATE", "1");
         let mut w = StateWriter::new();
         assert!(w.path.is_none());
-        w.update(0.9, 0.9, 0.9, 0.9, (0, 0, 0), (255, 255, 255));
+        w.update(0.9, 0.9, 0.9, 0.9, (0, 0, 0), (255, 255, 255), 100.0, 100);
         std::env::remove_var("SHARKVIS_NO_STATE");
     }
 
@@ -689,7 +734,7 @@ mod tests {
         w.path = Some(path.clone());
         w.dir_ready = true;
         for _ in 0..5 {
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0));
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 100.0, 100);
             std::thread::sleep(std::time::Duration::from_millis(60));
         }
         let text = std::fs::read_to_string(&path).unwrap();
@@ -820,7 +865,7 @@ mod tests {
         with_state_path(&path, || {
             let mut w = StateWriter::new();
             assert!(w.custom, "override is a custom path");
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0));
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 100.0, 100);
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(text.contains("started="), "session id published, got {}", text);
             assert!(text.contains(&format!("pid={}", own_pid())), "got {}", text);
@@ -835,7 +880,7 @@ mod tests {
         with_xdg_rt(&rt, || {
             let mut w = StateWriter::new();
             assert!(!w.custom);
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0));
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 100.0, 100);
             let legacy = format!("{}/sharkvis/state", rt);
             let sess = format!("{}/sharkvis/state-{}", rt, own_pid());
             let a = std::fs::read_to_string(&legacy).unwrap();
@@ -891,6 +936,44 @@ mod tests {
             clear_state_file();
             assert!(!std::path::Path::new(&legacy).exists());
             assert!(!std::path::Path::new(&sess).exists());
+            let _ = std::fs::remove_dir(format!("{}/sharkvis", rt));
+            let _ = std::fs::remove_dir(&rt);
+        });
+    }
+
+    #[test]
+    fn sens_published_and_restored() {
+        let rt = std::env::temp_dir().join(format!("fake-rt3-{}", std::process::id()));
+        let rt = rt.to_string_lossy().into_owned();
+        with_xdg_rt(&rt, || {
+            let path = format!("{}/sharkvis/state", rt);
+            std::fs::create_dir_all(format!("{}/sharkvis", rt)).unwrap();
+            let mut w = StateWriter::new();
+            w.path = Some(path.clone());
+            w.dir_ready = true;
+            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 7.654321, 100);
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("sens=7.654321"), "sens field, got {}", text);
+            let got = read_sens();
+            assert!(got.is_some_and(|v| (v - 7.654321).abs() < 1e-6));
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(format!("{}/sharkvis", rt));
+            let _ = std::fs::remove_dir(&rt);
+        });
+    }
+
+    #[test]
+    fn sens_rejected_when_stale_or_garbage() {
+        let rt = std::env::temp_dir().join(format!("fake-rt4-{}", std::process::id()));
+        let rt = rt.to_string_lossy().into_owned();
+        with_xdg_rt(&rt, || {
+            let path = format!("{}/sharkvis/state", rt);
+            std::fs::create_dir_all(format!("{}/sharkvis", rt)).unwrap();
+            std::fs::write(&path, "energy=0.5 sens=nan started=1 pid=1\n").unwrap();
+            assert_eq!(read_sens(), None);
+            std::fs::write(&path, "energy=0.5 started=1 pid=1\n").unwrap();
+            assert_eq!(read_sens(), None);
+            let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir(format!("{}/sharkvis", rt));
             let _ = std::fs::remove_dir(&rt);
         });

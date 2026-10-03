@@ -23,6 +23,7 @@ pub struct Renderer {
     pub color_256: bool,
     pub grad_lo: u32,
     pub grad_hi: u32,
+    pub grad_amt: u32,
     pub mode: RenderMode,
     x_off: usize,
     prev: Vec<u8>,
@@ -32,7 +33,7 @@ pub struct Renderer {
     db_x1: usize,
     db_y1: usize,
     row_col: Vec<Vec<u8>>,
-    grad_sig: (u32, u32, bool, usize),
+    grad_sig: (u32, u32, bool, usize, u32),
     barstr: [Vec<u8>; 9],
     spacestr: Vec<u8>,
     barstr_bw: usize,
@@ -171,11 +172,16 @@ impl Renderer {
         let hi_r = (self.grad_hi >> 16) & 0xff;
         let hi_g = (self.grad_hi >> 8) & 0xff;
         let hi_b = self.grad_hi & 0xff;
-        let frac = if rows > 1 {
+        let mut frac = if rows > 1 {
             from_bottom as f64 / (rows - 1) as f64
         } else {
             0.0
         };
+        // Gradient amount: quantize the blend position into that many
+        // discrete bands (100 = smooth). 0 would collapse everything onto
+        // the low end by construction, so it behaves as solid-low.
+        let levels = self.grad_amt.clamp(1, 100) as f64;
+        frac = (frac * levels).floor() / levels;
         let mut cr = (lo_r as f64 + (hi_r as f64 - lo_r as f64) * frac + 0.5) as u32;
         let mut cg = (lo_g as f64 + (hi_g as f64 - lo_g as f64) * frac + 0.5) as u32;
         let mut cb = (lo_b as f64 + (hi_b as f64 - lo_b as f64) * frac + 0.5) as u32;
@@ -207,7 +213,13 @@ impl Renderer {
     }
 
     fn row_colors(&mut self) {
-        let sig = (self.grad_lo, self.grad_hi, self.color_256, self.rows);
+        let sig = (
+            self.grad_lo,
+            self.grad_hi,
+            self.color_256,
+            self.rows,
+            self.grad_amt,
+        );
         if self.grad_sig == sig {
             return;
         }
@@ -258,6 +270,7 @@ impl Renderer {
             color_256: false,
             grad_lo: 0xff0000u32,
             grad_hi: 0x00ff00u32,
+            grad_amt: 100,
             mode: RenderMode::Bars,
             x_off: 0,
             prev: vec![0xFF; rows * cols],
@@ -267,7 +280,7 @@ impl Renderer {
             db_x1: if cols > 0 { cols - 1 } else { 0 },
             db_y1: if rows > 0 { rows - 1 } else { 0 },
             row_col: vec![Vec::new(); rows],
-            grad_sig: (0, 0, false, 0),
+            grad_sig: (0, 0, false, 0, 100),
             barstr: Default::default(),
             spacestr: Vec::new(),
             barstr_bw: 0,
@@ -314,7 +327,7 @@ impl Renderer {
         self.prev = vec![0xFF; rows * cols];
         self.osc_glow = vec![0; rows * cols];
         self.row_col = vec![Vec::new(); rows];
-        self.grad_sig = (0, 0, false, 0);
+        self.grad_sig = (0, 0, false, 0, 100);
         self.rowbuf = vec![0; cols];
         self.db_x0 = 0;
         self.db_y0 = 0;

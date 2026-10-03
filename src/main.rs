@@ -19,7 +19,7 @@ mod state;
 mod term;
 
 use crate::audio::Audio;
-use crate::config::{color_to_rgb, config_default_path, config_load, config_save, Config};
+use crate::config::{color_to_rgb, color_to_rgb_any, config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
 use crate::lyrics::{FetchOpts, LyricWorker};
 use crate::mpris::{poll_named, poll_position, poll_track, Track};
@@ -174,11 +174,71 @@ fn run_editor(path: &str) {
     }
 }
 
+fn config_use_jefetch_colors(cfg: &Config) -> bool {
+    let tok: String = cfg
+        .colors
+        .trim_start()
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != ',')
+        .collect();
+    tok.eq_ignore_ascii_case("jefetch")
+}
+
+/// Gradient pair published by jefetch (`low=#RRGGBB high=#RRGGBB`), runtime
+/// dir first, then the /tmp fallback. Both ends required and validated.
+fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
+    use crate::config::color_to_rgb_any;
+    let uid = unsafe { libc::getuid() };
+    let mut paths = Vec::new();
+    if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
+        let t = rt.trim_end_matches('/');
+        if !t.is_empty() {
+            paths.push(format!("{}/sharkvis/logo_colors", t));
+        }
+    }
+    paths.push(format!("/tmp/sharkvis-{}-logo-colors", uid));
+    for p in paths {
+        let text = match std::fs::read_to_string(&p) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let mut lo = None;
+        let mut hi = None;
+        for tok in text.split(|c: char| c.is_whitespace() || c == ',') {
+            if let Some(v) = tok.strip_prefix("low=") {
+                if color_to_rgb_any(v).is_some() {
+                    lo = Some(v.to_string());
+                }
+            } else if let Some(v) = tok.strip_prefix("high=") {
+                if color_to_rgb_any(v).is_some() {
+                    hi = Some(v.to_string());
+                }
+            }
+        }
+        if let (Some(l), Some(h)) = (lo, hi) {
+            let (lr, lg, lb) = color_to_rgb_any(&l).unwrap();
+            let (hr, hg, hb) = color_to_rgb_any(&h).unwrap();
+            return Some((
+                (lr as u8, lg as u8, lb as u8),
+                (hr as u8, hg as u8, hb as u8),
+            ));
+        }
+    }
+    None
+}
+
 fn apply_colors(rnd: &mut Renderer, cfg: &Config) {
-    if let Some((r, g, b)) = color_to_rgb(&cfg.gradient_low) {
+    if config_use_jefetch_colors(cfg) {
+        if let Some(((lr, lg, lb), (hr, hg, hb))) = logo_gradient() {
+            rnd.grad_lo = ((lr as u32) << 16) | ((lg as u32) << 8) | lb as u32;
+            rnd.grad_hi = ((hr as u32) << 16) | ((hg as u32) << 8) | hb as u32;
+            return;
+        }
+    }
+    if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_low) {
         rnd.grad_lo = (r << 16) | (g << 8) | b;
     }
-    if let Some((r, g, b)) = color_to_rgb(&cfg.gradient_high) {
+    if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_high) {
         rnd.grad_hi = (r << 16) | (g << 8) | b;
     }
 }
@@ -232,6 +292,7 @@ fn apply_settings(
     rnd.bar_width = cfg.bar_width;
     rnd.bar_spacing = cfg.bar_spacing;
     rnd.color_256 = cfg.color_256;
+    rnd.grad_amt = cfg.gradient_amt;
     apply_colors(rnd, cfg);
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
@@ -408,6 +469,14 @@ fn main() {
     ];
     dsp[0].display_fps = cfg.framerate.max(1) as f64;
     dsp[1].display_fps = cfg.framerate.max(1) as f64;
+    // Resume converged autosens from a recently exited session instead of
+    // re-adapting from scratch for seconds after every restart.
+    if let Some(rsens) = state::read_sens() {
+        dsp[0].sens = rsens;
+        dsp[0].sens_init = false;
+        dsp[1].sens = rsens;
+        dsp[1].sens_init = false;
+    }
 
     let mut audio = Audio::new(dsp[0].render_frame_size());
     audio.start(&cfg.source, cfg.sample_rate, cfg.channels);
@@ -420,6 +489,7 @@ fn main() {
 
     set_handler(libc::SIGINT, on_signal);
     set_handler(libc::SIGTERM, on_signal);
+    set_handler(libc::SIGHUP, on_signal);
     set_handler(libc::SIGWINCH, on_winch);
     set_handler(libc::SIGSEGV, on_fatal);
     set_handler(libc::SIGABRT, on_fatal);
@@ -452,11 +522,21 @@ fn main() {
     let mut heights: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
     let mut last_h: [Vec<f64>; 2] = [vec![0.001; bars], vec![0.001; bars]];
     let mut out = Vec::with_capacity(OUT_CAP);
+    // Audio reconnect backoff: survive device loss instead of exiting.
+    let mut audio_backoff_ms: u64 = 500;
+    let mut audio_retry_at = Instant::now();
 
     let mut st = SettingsUi::default();
     let mut in_settings = false;
     let mut force_draw = true;
     let mut chmask: u32 = 0;
+    // Save strictness: plain launch+quit never touches the file; only real
+    // edits mark it dirty. Tracks whether a config existed at startup.
+    let mut cfg_dirty = false;
+    let had_file = std::path::Path::new(&save_path).exists();
+    // Hot-reload stamp for the color section (config edited elsewhere).
+    let mut last_color_check = Instant::now();
+    let mut last_color_stamp: Option<(std::time::SystemTime, u64)> = None;
     let mut lyric = LyricWorker::new();
     let mut track = Track::default();
     let mut last_track_poll = Instant::now();
@@ -468,11 +548,14 @@ fn main() {
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
+    // Squelch gate for published state: hysteresis on the pre-gain peak so
+    // silence dust never publishes as signal. Bars on screen are untouched.
+    let mut gate_open = false;
     // Drop leftovers from a crashed run so consumers never read a dead
     // instance's colors. Fresh files are kept (concurrent instance).
     state::remove_stale_state();
 
-    let mut rc = 0;
+    let rc = 0;
     while !G_SIG.load(Ordering::SeqCst) {
         let t_frame0 = if g_debug { Some(Instant::now()) } else { None };
         let mut last_bytes = 0usize;
@@ -567,6 +650,12 @@ fn main() {
                         &mut last_h, rows, cols, chmask, (chmask & CH_AUDIO) != 0,
                         panel_width_for(cols),
                     );
+                    // Live persist: a crash after this point no longer loses
+                    // the change.
+                    cfg_dirty = true;
+                    if !config_save(&cfg, &save_path) {
+                        eprintln!("sharkvis: could not save config to {}", save_path);
+                    }
                     {
                         let stdout = std::io::stdout();
                         let mut so = stdout.lock();
@@ -616,6 +705,10 @@ fn main() {
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'c') || is_k(key, &cp[..clen], b'C') {
                     cfg.text_align = if cfg.text_align == "left" { "center".to_string() } else { "left".to_string() };
+                    cfg_dirty = true;
+                    if !config_save(&cfg, &save_path) {
+                        eprintln!("sharkvis: could not save config to {}", save_path);
+                    }
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'a') || is_k(key, &cp[..clen], b'A') {
                     lyric.set_follow(!lyric.following(), track.position);
@@ -627,15 +720,31 @@ fn main() {
                         _ => "auto".to_string(),
                     };
                     lyric.poke();
+                    cfg_dirty = true;
+                    if !config_save(&cfg, &save_path) {
+                        eprintln!("sharkvis: could not save config to {}", save_path);
+                    }
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'+') || is_k(key, &cp[..clen], b'=') {
                     cfg.lyric_offset_ms = (cfg.lyric_offset_ms + 500).clamp(-10000, 10000);
+                    cfg_dirty = true;
+                    if !config_save(&cfg, &save_path) {
+                        eprintln!("sharkvis: could not save config to {}", save_path);
+                    }
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'-') || is_k(key, &cp[..clen], b'_') {
                     cfg.lyric_offset_ms = (cfg.lyric_offset_ms - 500).clamp(-10000, 10000);
+                    cfg_dirty = true;
+                    if !config_save(&cfg, &save_path) {
+                        eprintln!("sharkvis: could not save config to {}", save_path);
+                    }
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'0') {
                     cfg.lyric_offset_ms = 0;
+                    cfg_dirty = true;
+                    if !config_save(&cfg, &save_path) {
+                        eprintln!("sharkvis: could not save config to {}", save_path);
+                    }
                     force_draw = true;
                 }
             }
@@ -705,9 +814,24 @@ fn main() {
             dsp[1].execute(samples_r.or(samples_l), n, &mut heights[1]);
         }
         if audio.failed() {
-            eprintln!("\nsharkvis: audio input failed: {}", audio.error());
-            rc = 1;
-            break;
+            if Instant::now() >= audio_retry_at {
+                eprintln!("\nsharkvis: audio input failed: {}; retrying", audio.error());
+                let mut na = Audio::new(dsp[0].render_frame_size());
+                na.start(&cfg.source, cfg.sample_rate, cfg.channels);
+                audio.stop();
+                audio = na;
+                for h in heights.iter_mut() {
+                    h.fill(0.0);
+                }
+                dsp[0].flush();
+                dsp[1].flush();
+                audio_retry_at = Instant::now() + Duration::from_millis(audio_backoff_ms);
+                if audio_backoff_ms < 5000 {
+                    audio_backoff_ms *= 2;
+                }
+            }
+        } else {
+            audio_backoff_ms = 500;
         }
 
         let pcl = per_ch_left(bars, cfg.channels);
@@ -758,10 +882,36 @@ fn main() {
             } else {
                 left
             };
+            let mut energy = energy;
+            let mut bass = bass;
+            let mut left = left;
+            let mut right = right;
+            {
+                let mut raw = dsp[0].raw_peak();
+                if cfg.channels > 1 {
+                    let r1 = dsp[1].raw_peak();
+                    if r1 > raw {
+                        raw = r1;
+                    }
+                }
+                if gate_open {
+                    if raw < 0.01 {
+                        gate_open = false;
+                    }
+                } else if raw > 0.02 {
+                    gate_open = true;
+                }
+                if !gate_open {
+                    energy = 0.0;
+                    bass = 0.0;
+                    left = 0.0;
+                    right = 0.0;
+                }
+            }
             let lo = color_to_rgb(&cfg.gradient_low).unwrap_or((255, 255, 255));
             let hi = color_to_rgb(&cfg.gradient_high).unwrap_or((255, 255, 255));
             let cv = |(r, g, b): (u32, u32, u32)| (r as u8, g as u8, b as u8);
-            live.update(energy, bass, left, right, cv(lo), cv(hi));
+            live.update(energy, bass, left, right, cv(lo), cv(hi), dsp[0].sens, cfg.gradient_amt);
         }
 
         // MPRIS (playerctl subprocesses) + lyric fetching block the render
@@ -770,6 +920,25 @@ fn main() {
         // Otherwise every position poll (~200ms) and track poll (~2s)
         // steals time from the 16ms frame budget and shows up as a
         // periodic micro-stutter in the continuous waveform.
+        // Color hot-reload: an external edit (or jefetch publishing new
+        // logo colors) applies within a second, no restart needed.
+        if last_color_check.elapsed() >= Duration::from_millis(1000) {
+            last_color_check = Instant::now();
+            if let Ok(meta) = std::fs::metadata(&save_path) {
+                if let Ok(mtime) = meta.modified() {
+                    let stamp = (mtime, meta.len());
+                    if last_color_stamp.as_ref() != Some(&stamp) {
+                        if last_color_stamp.is_some()
+                            && crate::config::reload_colors(&mut cfg, &save_path)
+                        {
+                            apply_colors(&mut rnd, &cfg);
+                            force_draw = true;
+                        }
+                        last_color_stamp = Some(stamp);
+                    }
+                }
+            }
+        }
         let need_lyrics = rnd.mode == RenderMode::Lyrics;
         if need_lyrics {
             if last_track_poll.elapsed() >= Duration::from_millis(2000) {
@@ -946,8 +1115,12 @@ fn main() {
         }
     }
 
-    if !config_save(&cfg, &save_path) {
-        eprintln!("sharkvis: could not save config to {}", save_path);
+    // Plain launch+quit never touches the file; only real edits do (or a
+    // first run with no file yet, so defaults are kept next time).
+    if cfg_dirty || !had_file {
+        if !config_save(&cfg, &save_path) {
+            eprintln!("sharkvis: could not save config to {}", save_path);
+        }
     }
 
     {
