@@ -133,10 +133,6 @@ pub fn color_index(hex: &str) -> i32 {
         .unwrap_or(-1)
 }
 
-pub fn color_to_rgb(hex: &str) -> Option<(u32, u32, u32)> {
-    parse_hex_rgb(hex.as_bytes())
-}
-
 pub fn config_default_path() -> String {
     if let Ok(env) = std::env::var("SHARKVIS_CONFIG") {
         if !env.is_empty() {
