@@ -184,6 +184,16 @@ fn config_use_jefetch_colors(cfg: &Config) -> bool {
     tok.eq_ignore_ascii_case("jefetch")
 }
 
+fn distinct_pair(lo: (u8, u8, u8), hi: (u8, u8, u8)) -> ((u8, u8, u8), (u8, u8, u8)) {
+    if lo != hi {
+        return (lo, hi);
+    }
+    let lum = 0.299 * lo.0 as f32 + 0.587 * lo.1 as f32 + 0.114 * lo.2 as f32;
+    let t = if lum > 127.5 { 0 } else { 255 };
+    let mix = |a: u8| (a as f32 + (t as f32 - a as f32) * 0.45 + 0.5) as u8;
+    (lo, (mix(lo.0), mix(lo.1), mix(lo.2)))
+}
+
 fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
     use crate::config::color_to_rgb_any;
     let uid = unsafe { libc::getuid() };
@@ -216,7 +226,7 @@ fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
         if let (Some(l), Some(h)) = (lo, hi) {
             let (lr, lg, lb) = color_to_rgb_any(&l).unwrap();
             let (hr, hg, hb) = color_to_rgb_any(&h).unwrap();
-            return Some((
+            return Some(distinct_pair(
                 (lr as u8, lg as u8, lb as u8),
                 (hr as u8, hg as u8, hb as u8),
             ));
