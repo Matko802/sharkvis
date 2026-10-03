@@ -26,8 +26,9 @@ use crate::mpris::{poll_named, poll_position, poll_track, Track};
 use crate::render::{RenderMode, Renderer};
 use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
-    term_cell_aspect, term_raw_enter, term_raw_restore, term_read_codepoint, term_winsize,
-    KEY_BACKSPACE, KEY_CHAR, KEY_ENTER, KEY_ESC,
+    mouse_decode, term_cell_aspect, term_mouse_enter, term_mouse_leave, term_raw_enter,
+    term_raw_restore, term_read_codepoint, term_winsize, KEY_BACKSPACE, KEY_CHAR, KEY_ENTER,
+    KEY_ESC, KEY_MOUSE,
 };
 
 const VIS_EPS: f64 = 0.001;
@@ -47,7 +48,7 @@ extern "C" fn on_winch(_sig: libc::c_int) {
 }
 
 extern "C" fn on_fatal(sig: libc::c_int) {
-    const RESTORE: &[u8] = b"\x1b[?25h\x1b[0m\x1b[2J\x1b[H";
+    const RESTORE: &[u8] = b"\x1b[?25h\x1b[0m\x1b[?1000l\x1b[?1006l\x1b[2J\x1b[H";
     unsafe {
         let _ = libc::write(1, RESTORE.as_ptr() as *const libc::c_void, RESTORE.len());
         term_raw_restore(0);
@@ -652,6 +653,7 @@ fn main() {
         } else if in_settings {
             if is_k(key, &cp[..clen], b'g') || is_k(key, &cp[..clen], b'G') || key == KEY_ESC {
                 in_settings = false;
+                term_mouse_leave();
                 {
                     let stdout = std::io::stdout();
                     let mut so = stdout.lock();
@@ -673,17 +675,25 @@ fn main() {
             {
                 break;
             } else {
-                st.key(
-                    &mut cfg,
-                    key,
-                    if key == KEY_CHAR { Some(&cp[..clen]) } else { None },
-                    &mut chmask,
-                );
+                if key == KEY_MOUSE {
+                    if let Some((_, x, y)) = mouse_decode(&cp[..clen]) {
+                        st.click(&mut cfg, y as u32, x as u32, panel_width_for(cols), &mut chmask);
+                    }
+                } else {
+                    st.key(
+                        &mut cfg,
+                        key,
+                        if key == KEY_CHAR { Some(&cp[..clen]) } else { None },
+                        &mut chmask,
+                    );
+                }
                 if (chmask & CH_EDITOR) != 0 {
                     if !config_save(&cfg, &save_path) {
                         eprintln!("sharkvis: could not save config to {}", save_path);
                     }
+                    term_mouse_leave();
                     run_editor(&save_path);
+                    term_mouse_enter();
                     if !config_load(&mut cfg, &save_path) {
                         eprintln!("sharkvis: error loading config {}", save_path);
                     }
@@ -715,6 +725,7 @@ fn main() {
             if is_k(key, &cp[..clen], b'g') || is_k(key, &cp[..clen], b'G') {
                 in_settings = true;
                 chmask = 0;
+                term_mouse_enter();
                 {
                     let stdout = std::io::stdout();
                     let mut so = stdout.lock();
@@ -1169,7 +1180,7 @@ fn main() {
         let stdout = std::io::stdout();
         let mut so = stdout.lock();
         let mut tail = Vec::with_capacity(CLEAR_ESC.len() + 8);
-        tail.extend_from_slice(b"\x1b[?25h\x1b[0m");
+        tail.extend_from_slice(b"\x1b[?25h\x1b[0m\x1b[?1000l\x1b[?1006l");
         tail.extend_from_slice(CLEAR_ESC);
         let _ = so.write_all(&tail);
         let _ = so.flush();

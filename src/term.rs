@@ -220,6 +220,9 @@ pub fn term_read_codepoint(fd: RawFd, out: &mut [u8; 8]) -> (i32, usize) {
             if let Some(c2) = read_byte(fd) {
                 if c2 == b'[' && poll_readable(fd, 30) {
                     if let Some(c3) = read_byte(fd) {
+                        if c3 == b'<' {
+                            return read_sgr_mouse(fd, out);
+                        }
                         return match c3 {
                             b'A' => (KEY_UP, 0),
                             b'B' => (KEY_DOWN, 0),

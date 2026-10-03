@@ -422,6 +422,50 @@ impl SettingsUi {
         }
     }
 
+    pub fn row_at_y(cfg: &Config, y: u32) -> Option<usize> {
+        let mut yy = 6u32;
+        for id in Self::visible_rows(cfg) {
+            if yy == y {
+                return Some(id);
+            }
+            yy += 1;
+            if id == S_MODE {
+                yy += 1;
+            }
+        }
+        if yy == y {
+            return Some(S_RESET);
+        }
+        None
+    }
+
+    pub fn click(&mut self, cfg: &mut Config, y: u32, x: u32, pw: usize, changed: &mut u32) {
+        if x == 0 || x as usize > pw {
+            return;
+        }
+        let Some(id) = Self::row_at_y(cfg, y) else {
+            return;
+        };
+        if id == S_RESET {
+            self.sel = S_RESET;
+            self.handle_reset(cfg, changed);
+            self.clamp_sel(cfg);
+            return;
+        }
+        self.sel = id;
+        self.confirm_reset = false;
+        if x > pw as u32 / 2 {
+            if id == S_CHARSET {
+                *changed |= CH_EDITOR;
+            } else {
+                Self::adjust(cfg, id, 1, changed);
+            }
+        } else {
+            Self::adjust(cfg, id, -1, changed);
+        }
+        self.clamp_sel(cfg);
+    }
+
     pub fn draw(&mut self, cfg: &Config, out: &mut Vec<u8>, cap: usize, rows: u32, pw: usize) {
         if self.confirm_reset && now_ms() > self.confirm_deadline_ms {
             self.confirm_reset = false;
@@ -638,6 +682,29 @@ mod tests {
         let rows = SettingsUi::visible_rows(&cfg);
         assert!(!rows.contains(&S_GLO) && !rows.contains(&S_GHI));
         assert!(rows.contains(&S_COLORS) && rows.contains(&S_GRAD));
+    }
+
+    #[test]
+    fn click_selects_and_adjusts() {
+        let mut cfg = Config::default();
+        cfg.mode = "bars".to_string();
+        let ids = SettingsUi::visible_rows(&cfg);
+        assert_eq!(SettingsUi::row_at_y(&cfg, 6), Some(ids[0]));
+        assert_eq!(SettingsUi::row_at_y(&cfg, 1), None);
+        let mut ui = SettingsUi::default();
+        let mut changed = 0;
+        let y = (6..40)
+            .find(|&yy| SettingsUi::row_at_y(&cfg, yy) == Some(S_FPS))
+            .unwrap();
+        let before = cfg.framerate;
+        ui.click(&mut cfg, y, 4, 40, &mut changed);
+        assert_eq!(ui.sel, S_FPS);
+        assert_eq!(cfg.framerate, before - 5);
+        assert_eq!(changed & CH_LAYOUT, CH_LAYOUT);
+        ui.click(&mut cfg, y, 39, 40, &mut changed);
+        assert_eq!(cfg.framerate, before);
+        ui.click(&mut cfg, y, 99, 40, &mut changed);
+        assert_eq!(ui.sel, S_FPS);
     }
 
     #[test]
