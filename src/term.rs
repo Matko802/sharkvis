@@ -10,6 +10,7 @@ pub const KEY_RIGHT: i32 = 0x1004;
 pub const KEY_ENTER: i32 = 0x1005;
 pub const KEY_BACKSPACE: i32 = 0x1006;
 pub const KEY_CHAR: i32 = 0x1007;
+pub const KEY_MOUSE: i32 = 0x1008;
 
 static mut SAVED: std::mem::MaybeUninit<libc::termios> = std::mem::MaybeUninit::uninit();
 static HAVE_SAVED: AtomicBool = AtomicBool::new(false);
@@ -68,6 +69,100 @@ pub fn term_raw_restore(fd: RawFd) {
             libc::tcsetattr(fd, libc::TCSANOW, p);
         }
     }
+}
+
+pub fn term_mouse_enter() {
+    unsafe {
+        libc::write(1, b"\x1b[?1000h\x1b[?1006h".as_ptr() as *const libc::c_void, 16);
+    }
+}
+
+pub fn term_mouse_leave() {
+    unsafe {
+        libc::write(1, b"\x1b[?1000l\x1b[?1006l".as_ptr() as *const libc::c_void, 16);
+    }
+}
+
+pub fn mouse_decode(cp: &[u8]) -> Option<(u8, u16, u16)> {
+    if cp.len() < 5 {
+        return None;
+    }
+    let x = u16::from_le_bytes([cp[1], cp[2]]);
+    let y = u16::from_le_bytes([cp[3], cp[4]]);
+    if x == 0 || y == 0 {
+        return None;
+    }
+    Some((cp[0], x, y))
+}
+
+fn read_sgr_mouse(fd: RawFd, out: &mut [u8; 8]) -> (i32, usize) {
+    let mut body = [0u8; 16];
+    let mut n = 0usize;
+    loop {
+        if n >= body.len() {
+            break;
+        }
+        if !poll_readable(fd, 30) {
+            break;
+        }
+        match read_byte(fd) {
+            Some(b) => {
+                body[n] = b;
+                n += 1;
+                if b == b'M' || b == b'm' {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+    if n == 0 || (body[n - 1] != b'M' && body[n - 1] != b'm') {
+        return (KEY_ESC, 0);
+    }
+    if body[n - 1] == b'm' {
+        return (KEY_NONE, 0);
+    }
+    let mut nums = [0u32; 3];
+    let mut ni = 0usize;
+    let mut cur = 0u32;
+    let mut digits = 0u32;
+    let mut i = 0usize;
+    while i + 1 < n {
+        let b = body[i];
+        if b.is_ascii_digit() {
+            cur = cur.saturating_mul(10).saturating_add((b - b'0') as u32);
+            digits += 1;
+        } else if b == b';' {
+            if ni < 3 {
+                nums[ni] = cur;
+                ni += 1;
+            }
+            cur = 0;
+            digits = 0;
+        } else {
+            return (KEY_ESC, 0);
+        }
+        i += 1;
+    }
+    if digits == 0 || ni != 2 {
+        return (KEY_ESC, 0);
+    }
+    nums[ni] = cur;
+    let btn = nums[0];
+    let x = nums[1].clamp(1, 65535);
+    let y = nums[2].clamp(1, 65535);
+    if btn & 64 != 0 {
+        if btn & 1 != 0 {
+            return (KEY_DOWN, 0);
+        }
+        return (KEY_UP, 0);
+    }
+    out[0] = (btn & 0xff) as u8;
+    out[1] = (x & 0xff) as u8;
+    out[2] = ((x >> 8) & 0xff) as u8;
+    out[3] = (y & 0xff) as u8;
+    out[4] = ((y >> 8) & 0xff) as u8;
+    (KEY_MOUSE, 5)
 }
 
 fn poll_readable(fd: RawFd, timeout_ms: i32) -> bool {
