@@ -373,6 +373,7 @@ impl Dsp {
                     }
                 }
             }
+            self.sens = self.sens.clamp(1e-3, 1e6);
         }
 
         if self.sens_scale != 1.0 {

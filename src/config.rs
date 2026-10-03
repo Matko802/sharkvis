@@ -269,8 +269,7 @@ fn jbool(v: &serde_json::Value, cur: bool) -> bool {
 }
 
 /// `colors` style shortcut applied over the loaded gradients: empty is a
-/// no-op, `sharkvis` pins blue/purple, one valid color goes solid, a
-/// `low,high` pair sets both ends.
+/// no-op, one valid color goes solid, a `low,high` pair sets both ends.
 fn apply_color_value(cfg: &mut Config, color: &serde_json::Value) {
     if let Some(s) = color.get("color_mode").and_then(|v| v.as_str()) {
         if s == "256" || s == "indexed" {
@@ -342,11 +341,6 @@ fn apply_colors_style(cfg: &mut Config) {
             cfg.gradient_low = first.to_string();
             cfg.gradient_high = second.to_string();
         }
-        return;
-    }
-    if s.eq_ignore_ascii_case("sharkvis") {
-        cfg.gradient_low = "blue".to_string();
-        cfg.gradient_high = "purple".to_string();
         return;
     }
     if color_to_rgb_any(s).is_some() {
@@ -642,7 +636,7 @@ mod tests {
                 "color_mode": "256",
                 "gradient_low": "red",
                 "gradient_high": "#00ff00",
-                "colors": "sharkvis",
+                "colors": "jefetch",
                 "gradient": 50
             },
             "visualizer": {
@@ -669,10 +663,10 @@ mod tests {
         assert_eq!(c.sample_rate, 44100);
         assert_eq!(c.channels, 1);
         assert!(c.color_256);
-        // colors=sharkvis pins blue/purple over the file gradients
-        assert_eq!(c.gradient_low, "blue");
-        assert_eq!(c.gradient_high, "purple");
-        assert_eq!(c.colors, "sharkvis");
+        // colors=jefetch leaves file gradients alone
+        assert_eq!(c.gradient_low, "red");
+        assert_eq!(c.gradient_high, "#00ff00");
+        assert_eq!(c.colors, "jefetch");
         assert_eq!(c.gradient_amt, 50);
         assert_eq!(c.mode, "wave");
         assert_eq!(c.text_align, "left");
@@ -691,7 +685,7 @@ mod tests {
         let mut c = Config::default();
         c.gradient_low = "red".to_string();
         c.gradient_high = "#00ff00".to_string();
-        c.colors = "sharkvis".to_string();
+        c.colors = "jefetch".to_string();
         c.gradient_amt = 42;
         c.method = "auto".to_string();
         c.chars = "x\"y\\z".as_bytes().to_vec();
@@ -701,10 +695,10 @@ mod tests {
         assert!(config_save(&c, &ps));
         let mut c2 = Config::default();
         assert!(config_load(&mut c2, &ps));
-        // colors=sharkvis pins over loaded gradients on every load
-        assert_eq!(c2.gradient_low, "blue");
-        assert_eq!(c2.gradient_high, "purple");
-        assert_eq!(c2.colors, "sharkvis");
+        // jefetch style leaves file gradients alone on every load
+        assert_eq!(c2.gradient_low, "red");
+        assert_eq!(c2.gradient_high, "#00ff00");
+        assert_eq!(c2.colors, "jefetch");
         assert_eq!(c2.gradient_amt, 42);
         assert_eq!(c2.method, "auto");
         assert_eq!(c2.chars, "x\"y\\z".as_bytes());
@@ -757,9 +751,6 @@ mod tests {
         c.gradient_low = "aa".to_string();
         apply_colors_style(&mut c);
         assert_eq!(c.gradient_low, "aa");
-        c.colors = "sharkvis".to_string();
-        apply_colors_style(&mut c);
-        assert_eq!((c.gradient_low.as_str(), c.gradient_high.as_str()), ("blue", "purple"));
         c.colors = "red".to_string();
         apply_colors_style(&mut c);
         assert_eq!((c.gradient_low.as_str(), c.gradient_high.as_str()), ("red", "red"));

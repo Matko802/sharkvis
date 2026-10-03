@@ -75,7 +75,7 @@ fn clamp_d(v: f64, lo: f64, hi: f64) -> f64 {
     v.max(lo).min(hi)
 }
 
-/// Colors preset style: 0 = custom pair, 1 = sharkvis, 2 = jefetch.
+/// Colors preset style: 0 = custom pair, 1 = jefetch.
 /// First whitespace/comma-separated token decides, case-insensitive.
 fn colors_style(cfg: &Config) -> u8 {
     let tok: String = cfg
@@ -84,10 +84,7 @@ fn colors_style(cfg: &Config) -> u8 {
         .chars()
         .take_while(|c| !c.is_whitespace() && *c != ',')
         .collect();
-    let low = tok.to_ascii_lowercase();
-    if low == "jefetch" {
-        2
-    } else if low == "sharkvis" {
+    if tok.eq_ignore_ascii_case("jefetch") {
         1
     } else {
         0
@@ -227,7 +224,7 @@ impl SettingsUi {
             }
             S_COLORS => {
                 let cur = colors_style(cfg);
-                let next = (cur as i64 + dir).rem_euclid(3) as u8;
+                let next = (cur as i64 + dir).rem_euclid(2) as u8;
                 if next == 0 {
                     let stash = COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
                     if !stash.custom.is_empty() {
@@ -239,19 +236,6 @@ impl SettingsUi {
                         cfg.gradient_low = stash.lo.clone();
                         cfg.gradient_high = stash.hi.clone();
                     }
-                } else if next == 1 {
-                    if cur == 0 {
-                        let mut stash =
-                            COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
-                        if !cfg.colors.is_empty() {
-                            stash.custom = cfg.colors.clone();
-                        }
-                        stash.lo = cfg.gradient_low.clone();
-                        stash.hi = cfg.gradient_high.clone();
-                    }
-                    cfg.colors = "sharkvis".to_string();
-                    cfg.gradient_low = "blue".to_string();
-                    cfg.gradient_high = "purple".to_string();
                 } else {
                     if cur == 0 {
                         let mut stash =
@@ -355,7 +339,7 @@ impl SettingsUi {
 
     pub fn visible_rows(cfg: &Config) -> Vec<usize> {
         let mut rows = vec![S_MODE, S_GRAD, S_COLORS];
-        if colors_style(cfg) != 2 {
+        if colors_style(cfg) != 1 {
             rows.push(S_GHI);
             rows.push(S_GLO);
         }
@@ -505,8 +489,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         }
         S_GRAD => format!("{}", cfg.gradient_amt),
         S_COLORS => match colors_style(cfg) {
-            2 => "jefetch".to_string(),
-            1 => "sharkvis".to_string(),
+            1 => "jefetch".to_string(),
             _ => "custom".to_string(),
         },
         S_GLO | S_GHI => {

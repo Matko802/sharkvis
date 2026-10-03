@@ -109,10 +109,23 @@ impl<'a> Reader<'a> {
         self.pos += 1;
         Ok(b)
     }
+    fn byte_name(b: u8) -> String {
+        // Protocol bytes are ASCII tags; show anything else as hex so error
+        // strings never carry mojibake.
+        if b.is_ascii_graphic() || b == b' ' {
+            format!("'{}'", b as char)
+        } else {
+            format!("0x{:02X}", b)
+        }
+    }
     fn tag(&mut self, t: u8) -> Result<(), String> {
         let got = self.byte()?;
         if got != t {
-            return Err(format!("pulse: expected tag {} but got {}", t as char, got as char));
+            return Err(format!(
+                "pulse: expected tag {} but got {}",
+                Self::byte_name(t),
+                Self::byte_name(got)
+            ));
         }
         Ok(())
     }
@@ -120,7 +133,7 @@ impl<'a> Reader<'a> {
         match self.byte()? {
             TAG_BOOLEAN_TRUE => Ok(true),
             TAG_BOOLEAN_FALSE => Ok(false),
-            b => Err(format!("pulse: expected boolean tag, got {}", b as char)),
+            b => Err(format!("pulse: expected boolean tag, got {}", Self::byte_name(b))),
         }
     }
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {

@@ -155,29 +155,33 @@ fn parse_string(p: &mut Parser) -> Option<String> {
         return None;
     }
     p.pos += 1;
-    let mut o = String::new();
+    // Raw bytes: pushing each byte as a char would double-encode multibyte
+    // UTF-8 (mojibake in lyrics). Buffer bytes, decode once at the end.
+    let mut o: Vec<u8> = Vec::new();
     while let Some(&c) = p.b.get(p.pos) {
         match c {
             b'"' => {
                 p.pos += 1;
-                return Some(o);
+                return Some(String::from_utf8_lossy(&o).into_owned());
             }
             b'\\' => {
                 p.pos += 1;
                 match p.b.get(p.pos) {
-                    Some(b'n') => o.push('\n'),
-                    Some(b'r') => o.push('\r'),
-                    Some(b't') => o.push('\t'),
-                    Some(b'"') => o.push('"'),
-                    Some(b'\\') => o.push('\\'),
-                    Some(b'/') => o.push('/'),
+                    Some(b'n') => o.push(b'\n'),
+                    Some(b'r') => o.push(b'\r'),
+                    Some(b't') => o.push(b'\t'),
+                    Some(b'"') => o.push(b'"'),
+                    Some(b'\\') => o.push(b'\\'),
+                    Some(b'/') => o.push(b'/'),
                     Some(b'u') => {
                         if p.pos + 4 >= p.b.len() {
                             return None;
                         }
                         let h = std::str::from_utf8(&p.b[p.pos + 1..p.pos + 5]).ok()?;
                         let cp = u32::from_str_radix(h, 16).ok()?;
-                        o.push(char::from_u32(cp)?);
+                        let ch = char::from_u32(cp)?;
+                        let mut enc = [0u8; 4];
+                        o.extend_from_slice(ch.encode_utf8(&mut enc).as_bytes());
                         p.pos += 4;
                     }
                     _ => return None,
@@ -185,7 +189,7 @@ fn parse_string(p: &mut Parser) -> Option<String> {
                 p.pos += 1;
             }
             _ => {
-                o.push(c as char);
+                o.push(c);
                 p.pos += 1;
             }
         }
@@ -643,6 +647,14 @@ mod tests {
         assert_eq!(v.pointer("/c/d").and_then(|x| x.as_f64()), Some(-250.0));
         assert!(parse_json("{bad").is_none());
         assert!(parse_json(&"[".repeat(9000)).is_none());
+    }
+
+    #[test]
+    fn json_strings_keep_multibyte_utf8() {
+        // Regression: pushing each byte as a char double-encodes multibyte
+        // sequences (mojibake in lyrics).
+        let v = parse_json("\"caf\u{00e9} \\u4e2d\\u6587\"").expect("parse");
+        assert_eq!(v.as_str(), Some("café 中文"));
     }
 
     #[test]

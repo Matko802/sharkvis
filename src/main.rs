@@ -19,7 +19,7 @@ mod state;
 mod term;
 
 use crate::audio::Audio;
-use crate::config::{color_to_rgb, color_to_rgb_any, config_default_path, config_load, config_save, Config};
+use crate::config::{color_to_rgb_any, config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
 use crate::lyrics::{FetchOpts, LyricWorker};
 use crate::mpris::{poll_named, poll_position, poll_track, Track};
@@ -908,10 +908,23 @@ fn main() {
                     right = 0.0;
                 }
             }
-            let lo = color_to_rgb(&cfg.gradient_low).unwrap_or((255, 255, 255));
-            let hi = color_to_rgb(&cfg.gradient_high).unwrap_or((255, 255, 255));
-            let cv = |(r, g, b): (u32, u32, u32)| (r as u8, g as u8, b as u8);
-            live.update(energy, bass, left, right, cv(lo), cv(hi), dsp[0].sens, cfg.gradient_amt);
+            // Publish what is actually on screen (bars, wave, lyrics text
+            // all render from rnd.grad_lo/hi). In jefetch mode those come
+            // from the live logo_colors file, so jefetch text following
+            // this state (textcolor=sharkvis) stays in sync too.
+            let lo_u = rnd.grad_lo;
+            let hi_u = rnd.grad_hi;
+            let lo = (
+                ((lo_u >> 16) & 0xff) as u8,
+                ((lo_u >> 8) & 0xff) as u8,
+                (lo_u & 0xff) as u8,
+            );
+            let hi = (
+                ((hi_u >> 16) & 0xff) as u8,
+                ((hi_u >> 8) & 0xff) as u8,
+                (hi_u & 0xff) as u8,
+            );
+            live.update(energy, bass, left, right, lo, hi, dsp[0].sens, cfg.gradient_amt);
         }
 
         // MPRIS (playerctl subprocesses) + lyric fetching block the render
@@ -920,8 +933,10 @@ fn main() {
         // Otherwise every position poll (~200ms) and track poll (~2s)
         // steals time from the 16ms frame budget and shows up as a
         // periodic micro-stutter in the continuous waveform.
-        // Color hot-reload: an external edit (or jefetch publishing new
-        // logo colors) applies within a second, no restart needed.
+        // Color hot-reload: an external config edit applies within a
+        // second, no restart needed. In jefetch mode the logo_colors file
+        // can also change under us (new logo), so re-resolve it here too —
+        // bars, lyrics text and the published state all follow together.
         if last_color_check.elapsed() >= Duration::from_millis(1000) {
             last_color_check = Instant::now();
             if let Ok(meta) = std::fs::metadata(&save_path) {
@@ -936,6 +951,13 @@ fn main() {
                         }
                         last_color_stamp = Some(stamp);
                     }
+                }
+            }
+            if config_use_jefetch_colors(&cfg) {
+                let before = (rnd.grad_lo, rnd.grad_hi);
+                apply_colors(&mut rnd, &cfg);
+                if (rnd.grad_lo, rnd.grad_hi) != before {
+                    force_draw = true;
                 }
             }
         }

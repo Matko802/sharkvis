@@ -220,29 +220,33 @@ pub(crate) fn json_string(src: &str, key: &str) -> Option<String> {
         return None;
     }
     rest = rest.strip_prefix('"')?;
-    let mut o = String::new();
+    // Raw bytes, decoded once at the end: pushing each byte as a char would
+    // double-encode multibyte UTF-8 (mojibake in lyrics).
+    let mut o: Vec<u8> = Vec::new();
     let mut it = rest.bytes();
     while let Some(b) = it.next() {
         match b {
             b'\\' => match it.next()? {
-                b'n' => o.push('\n'),
-                b'r' => o.push('\r'),
-                b't' => o.push('\t'),
-                b'"' => o.push('"'),
-                b'\\' => o.push('\\'),
-                b'/' => o.push('/'),
+                b'n' => o.push(b'\n'),
+                b'r' => o.push(b'\r'),
+                b't' => o.push(b'\t'),
+                b'"' => o.push(b'"'),
+                b'\\' => o.push(b'\\'),
+                b'/' => o.push(b'/'),
                 b'u' => {
                     let h: Vec<u8> = it.by_ref().take(4).collect();
                     if h.len() < 4 {
                         return None;
                     }
                     let cp = u32::from_str_radix(std::str::from_utf8(&h).ok()?, 16).ok()?;
-                    o.push(char::from_u32(cp)?);
+                    let ch = char::from_u32(cp)?;
+                    let mut enc = [0u8; 4];
+                    o.extend_from_slice(ch.encode_utf8(&mut enc).as_bytes());
                 }
                 _ => return None,
             },
-            b'"' => return Some(o),
-            _ => o.push(b as char),
+            b'"' => return Some(String::from_utf8_lossy(&o).into_owned()),
+            _ => o.push(b),
         }
     }
     None
@@ -1269,6 +1273,16 @@ mod tests {
             Some("[00:01.00]hi\nthere \"yo\"".to_string())
         );
         assert_eq!(json_string(body, "missing"), None);
+    }
+
+    #[test]
+    fn json_string_keeps_multibyte_utf8() {
+        // Regression: pushing each byte as a char double-encodes multibyte
+        // sequences (mojibake in lyrics).
+        let body = r#"{"t":"caf\u00e9 \u4e2d\u6587"}"#;
+        assert_eq!(json_string(body, "t"), Some("café 中文".to_string()));
+        let raw = "{\"t\":\"caf\u{00e9}\"}";
+        assert_eq!(json_string(raw, "t"), Some("café".to_string()));
     }
 
     #[test]
