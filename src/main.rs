@@ -237,18 +237,27 @@ fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
 }
 
 fn apply_colors(rnd: &mut Renderer, cfg: &Config) {
+    let before = (rnd.grad_lo, rnd.grad_hi, rnd.color_256, rnd.grad_amt);
+    rnd.color_256 = cfg.color_256;
+    rnd.grad_amt = cfg.gradient_amt;
+    let mut done = false;
     if config_use_jefetch_colors(cfg) {
         if let Some(((lr, lg, lb), (hr, hg, hb))) = logo_gradient() {
             rnd.grad_lo = ((lr as u32) << 16) | ((lg as u32) << 8) | lb as u32;
             rnd.grad_hi = ((hr as u32) << 16) | ((hg as u32) << 8) | hb as u32;
-            return;
+            done = true;
         }
     }
-    if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_low) {
-        rnd.grad_lo = (r << 16) | (g << 8) | b;
+    if !done {
+        if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_low) {
+            rnd.grad_lo = (r << 16) | (g << 8) | b;
+        }
+        if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_high) {
+            rnd.grad_hi = (r << 16) | (g << 8) | b;
+        }
     }
-    if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_high) {
-        rnd.grad_hi = (r << 16) | (g << 8) | b;
+    if (rnd.grad_lo, rnd.grad_hi, rnd.color_256, rnd.grad_amt) != before {
+        rnd.clear();
     }
 }
 
