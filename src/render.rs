@@ -58,6 +58,8 @@ pub struct Renderer {
     sc_hi: Vec<i64>,
     sc_lo2: Vec<i64>,
     sc_hi2: Vec<i64>,
+    sm_l: Vec<f64>,
+    sm_r: Vec<f64>,
     text: Vec<char>,
     text_dim: Vec<bool>,
     focus: usize,
@@ -307,6 +309,8 @@ impl Renderer {
             sc_hi: Vec::new(),
             sc_lo2: Vec::new(),
             sc_hi2: Vec::new(),
+            sm_l: Vec::new(),
+            sm_r: Vec::new(),
             text: "SHARKVIS".chars().collect(),
             text_dim: Vec::new(),
             focus: 0,
@@ -1551,6 +1555,8 @@ impl Renderer {
             self.sc_hi.resize(ncol, 0);
             self.sc_lo2.resize(ncol, 0);
             self.sc_hi2.resize(ncol, 0);
+            self.sm_l.resize(ncol, 0.0);
+            self.sm_r.resize(ncol, 0.0);
         }
 
         let rate = if self.wave_rate == 0 {
@@ -1596,8 +1602,17 @@ impl Renderer {
             } else {
                 vl
             };
-            let yl = (center - vl * height + 0.5) as i64;
-            let yr = (center - vr * height + 0.5) as i64;
+            let svl = 0.5 * vl + 0.5 * self.sm_l[c];
+            self.sm_l[c] = svl;
+            let svr = if stereo {
+                let v = 0.5 * vr + 0.5 * self.sm_r[c];
+                self.sm_r[c] = v;
+                v
+            } else {
+                svl
+            };
+            let yl = (center - svl * height + 0.5) as i64;
+            let yr = (center - svr * height + 0.5) as i64;
 
             let (mut llo, mut lhi) = (yl, yl);
             if let Some(q) = pl {
@@ -1932,6 +1947,8 @@ mod tests {
         let mut out = Vec::new();
         r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(!out.is_empty(), "snapshot must emit cells");
+        let mut out = Vec::new();
+        r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
 
         let lo = *r.sc_lo.iter().min().unwrap();
         let hi = *r.sc_hi.iter().max().unwrap();
