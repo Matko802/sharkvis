@@ -1,4 +1,4 @@
-VERSION ?= 3.0.0
+VERSION ?= 3.0.1
 PREFIX ?= /usr/local
 
 # Build through cargo. On NixOS, run inside `nix develop` (which provides
