@@ -1115,13 +1115,15 @@ fn main() {
                         }
                     }
                 }
-            } else {
+            } else if rnd.mode == RenderMode::Lyrics {
                 need_draw = n > 0;
                 if !need_draw
                     && last_static_draw.elapsed() >= Duration::from_millis(500)
                 {
                     need_draw = true;
                 }
+            } else {
+                need_draw = true;
             }
         }
 
