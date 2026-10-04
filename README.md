@@ -4,7 +4,7 @@
 
 # sharkvis
 
-Linux only audio visualizer, now in C
+Linux only audio visualizer, now in Rust
 
 Inspired by [cava](https://github.com/karlstav/cava) and [cli-visualizer](https://github.com/PosixAlchemist/cli-visualizer) also [LyricsMPRIS-Rust](https://github.com/BEST8OY/LyricsMPRIS-Rust)
 
@@ -50,7 +50,8 @@ makepkg -si
 
 ```sh
 sharkvis
-sharkvis -p config.conf
+sharkvis -p config.jsonc
+sharkvis --raw --bars 48 --fps 30
 sharkvis -h
 ```
 

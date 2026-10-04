@@ -1806,7 +1806,7 @@ impl Renderer {
     }
 
     pub fn draw(&mut self, values: &[f64], out: &mut Vec<u8>, cap: usize) {
-        let region = self.cols - self.x_off;
+        let region = self.cols.saturating_sub(self.x_off);
         if region == 0 {
             return;
         }
@@ -1831,7 +1831,7 @@ impl Renderer {
         out: &mut Vec<u8>,
         cap: usize,
     ) {
-        let region = self.cols - self.x_off;
+        let region = self.cols.saturating_sub(self.x_off);
         if region == 0 {
             return;
         }

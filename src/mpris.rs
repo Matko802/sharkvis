@@ -69,7 +69,17 @@ pub(crate) fn cmd_out(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<Strin
     String::from_utf8(out).ok().map(|s| s.trim().to_string())
 }
 
-pub fn player_list() -> Vec<String> {    let mut out = Vec::new();
+pub fn player_list() -> Vec<String> {
+    static CACHE: std::sync::Mutex<(Vec<String>, Option<Instant>)> =
+        std::sync::Mutex::new((Vec::new(), None));
+    if let Ok(cache) = CACHE.lock() {
+        if let Some(t) = cache.1 {
+            if t.elapsed() < Duration::from_millis(2000) {
+                return cache.0.clone();
+            }
+        }
+    }
+    let mut out = Vec::new();
     if let Some(list) = cmd_out("playerctl", &["-l"], 500) {
         for line in list.lines() {
             let p = line.trim();
@@ -77,6 +87,10 @@ pub fn player_list() -> Vec<String> {    let mut out = Vec::new();
                 out.push(p.to_string());
             }
         }
+    }
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.0 = out.clone();
+        cache.1 = Some(Instant::now());
     }
     out
 }
@@ -93,11 +107,10 @@ pub fn any_active_player() -> bool {
 }
 
 fn playing_player(allow: &[String]) -> Option<String> {
-    let list = cmd_out("playerctl", &["-l"], 500)?;
-    let mut names: Vec<&str> = list.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-    names.sort_by_key(|p| if *p == "playerctld" { 0 } else { 1 });
+    let mut names: Vec<String> = player_list();
+    names.sort_by_key(|p| if p == "playerctld" { 0 } else { 1 });
     let mut paused_fallback = None;
-    for p in names {
+    for p in &names {
         if !allow.is_empty() && !allow.iter().any(|a| p == a || p.starts_with(a)) {
             continue;
         }

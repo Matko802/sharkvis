@@ -1,50 +1,55 @@
 # Configuration
 
 Config is looked up in `$SHARKVIS_CONFIG`, then
-`~/.config/sharkvis/config.toml`, then `./config.toml`. Settings changed in the
+`~/.config/sharkvis/config.jsonc`, then `./config.jsonc`. Settings changed in the
 panel save automatically when you close it.
 
 ## Example
 
-```ini
-[general]
-bars = 0
-bar_width = 2
-bar_spacing = 1
-framerate = 60
-sensitivity = 100
-autosens = 1
-lower_cutoff_freq = 50
-higher_cutoff_freq = 8000
-
-[smoothing]
-noise_reduction = 0.20
-
-[input]
-method = pulse
-source = auto
-sample_rate = 48000
-channels = 2
-
-[color]
-color_mode = 24bit
-gradient_low = ffffff
-gradient_high = ffffff
-
-[visualizer]
-mode = lyrics
-chars = ▁▂▃▄▅▆▇█
-text_align = center
-text_size = 1
-text_style = big ahh
-provider = auto
-offset_ms = 0
-
-[lyrics]
-folder = ~/Music
-
-[mpris]
-players = firefox,spotify
+```jsonc
+{
+    "general": {
+        "bars": 0,
+        "bar_width": 2,
+        "bar_spacing": 1,
+        "framerate": 60,
+        "sensitivity": 100,
+        "autosens": true,
+        "lower_cutoff_freq": 50,
+        "higher_cutoff_freq": 8000
+    },
+    "smoothing": {
+        "noise_reduction": 0.20
+    },
+    "input": {
+        "method": "pulse",
+        "source": "auto",
+        "sample_rate": 48000,
+        "channels": 2
+    },
+    "color": {
+        "color_mode": "24bit",
+        "gradient_low": "ffffff",
+        "gradient_high": "ffffff",
+        "colors": "",
+        "gradient": 100
+    },
+    "visualizer": {
+        "mode": "lyrics",
+        "text_align": "center",
+        "text_size": 1,
+        "text_style": "big ahh",
+        "provider": "auto",
+        "offset_ms": 0,
+        "chars": "▁▂▃▄▅▆▇█"
+    },
+    "lyrics": {
+        "folder": "~/Music"
+    },
+    "mpris": {
+        "players": "firefox,spotify"
+    }
+}
 ```
 
 ## General
@@ -143,5 +148,9 @@ metadata.
 | Flag | What it does |
 |------|--------------|
 | `-p <path>` | Use this config file |
+| `--raw` | Print bar levels to stdout instead of drawing |
+| `--bars <n>` | Bar count for `--raw` |
+| `--fps <n>` | Framerate for `--raw` |
+| `--raw-mode <mode>` | `bars`, `wave` or `oscilloscope` for `--raw` |
 | `-h` | Print help |
 | `-v` | Print version |

@@ -570,6 +570,7 @@ fn main() {
     let mut st = SettingsUi::default();
     let mut in_settings = false;
     let mut force_draw = true;
+    let mut last_static_draw = Instant::now();
     let mut chmask: u32 = 0;
 
     let mut cfg_dirty = false;
@@ -1095,11 +1096,19 @@ fn main() {
                 }
             } else {
                 need_draw = n > 0;
+                if !need_draw
+                    && last_static_draw.elapsed() >= Duration::from_millis(500)
+                {
+                    need_draw = true;
+                }
             }
         }
 
         if need_draw {
             force_draw = false;
+            if rnd.mode != RenderMode::Bars {
+                last_static_draw = Instant::now();
+            }
             drew = true;
             last_h[0][..pcl].copy_from_slice(&heights[0][..pcl]);
             if cfg.channels > 1 {
