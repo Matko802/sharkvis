@@ -399,6 +399,9 @@ fn clamp_cfg(cfg: &mut Config) {
     if cfg.mode == "text" {
         cfg.mode = "lyrics".to_string();
     }
+    if cfg.text_align != "left" && cfg.text_align != "center" {
+        cfg.text_align = "center".to_string();
+    }
 }
 
 fn main() {
