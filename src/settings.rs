@@ -30,7 +30,8 @@ const S_STYLE: usize = 17;
 const S_PROVIDER: usize = 18;
 const S_OFFSET: usize = 19;
 const S_COLORS: usize = 20;
-const S_COUNT: usize = 21;
+const S_ALIGN: usize = 21;
+const S_COUNT: usize = 22;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -56,6 +57,7 @@ const LABELS: [&str; S_COUNT] = [
     "provider",
     "offset ms",
     "colors",
+    "align",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -320,6 +322,10 @@ impl SettingsUi {
                 cfg.text_style = if cfg.text_style == "normal" { "big ahh".to_string() } else { "normal".to_string() };
                 *changed |= CH_LAYOUT;
             }
+            S_ALIGN => {
+                cfg.text_align = if cfg.text_align == "left" { "center".to_string() } else { "left".to_string() };
+                *changed |= CH_LAYOUT;
+            }
             _ => {}
         }
     }
@@ -348,7 +354,7 @@ impl SettingsUi {
             ]),
 
             "lyrics" | "text" => {
-                rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_PROVIDER, S_OFFSET])
+                rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_ALIGN, S_PROVIDER, S_OFFSET])
             }
             _ => {}
         }
@@ -564,6 +570,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_PROVIDER => cfg.provider.clone(),
         S_OFFSET => format!("{:+}ms", cfg.lyric_offset_ms),
         S_STYLE => cfg.text_style.clone(),
+        S_ALIGN => cfg.text_align.clone(),
         _ => String::new(),
     }
 }
@@ -657,6 +664,7 @@ mod tests {
         assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXTSIZE));
         let lyr = rows_for("lyrics");
         assert!(lyr.contains(&S_TEXTSIZE) && lyr.contains(&S_PROVIDER) && lyr.contains(&S_OFFSET));
+        assert!(lyr.contains(&S_ALIGN) && !lyr.contains(&S_CHARSET));
         assert!(!lyr.contains(&S_SENS) && !lyr.contains(&S_BARS) && !lyr.contains(&S_CHARSET));
 
         assert_eq!(rows_for("text"), lyr);
