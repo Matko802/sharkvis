@@ -19,7 +19,8 @@ panel save automatically when you close it.
         "higher_cutoff_freq": 8000
     },
     "smoothing": {
-        "noise_reduction": 0.20
+        "noise_reduction": 0.20,
+        "wave_smoothing": 0.50
     },
     "input": {
         "method": "pulse",
@@ -61,6 +62,7 @@ panel save automatically when you close it.
 | `sensitivity` / `autosens` | Manual level, or let it ride the volume itself |
 | `lower_cutoff_freq` / `higher_cutoff_freq` | Frequency window in Hz |
 | `noise_reduction` | Smoothing amount |
+| `wave_smoothing` | Wave trace calmness, `0` raw up to `0.95`, same feel on any framerate |
 | `source` | PulseAudio source, `auto` follows the default monitor |
 | `channels` | `1` mono, `2` stereo (left/right react separately) |
 

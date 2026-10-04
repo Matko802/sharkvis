@@ -31,6 +31,7 @@ pub struct Config {
     pub lower_cutoff: u32,
     pub higher_cutoff: u32,
     pub noise_reduction: f64,
+    pub wave_smoothing: f64,
     pub method: String,
     pub source: String,
     pub sample_rate: u32,
@@ -63,6 +64,7 @@ impl Default for Config {
             lower_cutoff: 50,
             higher_cutoff: 8000,
             noise_reduction: 0.2,
+            wave_smoothing: 0.5,
             method: "pulse".to_string(),
             source: "auto".to_string(),
             sample_rate: 48000,
@@ -391,6 +393,14 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             cfg.noise_reduction = f;
         }
     }
+    if let Some(v) = root
+        .get("smoothing")
+        .and_then(|s| s.get("wave_smoothing"))
+    {
+        if let Some(f) = v.as_f64() {
+            cfg.wave_smoothing = f.clamp(0.0, 0.95);
+        }
+    }
     if let Some(input) = root.get("input") {
         if let Some(m) = input.get("method").and_then(|v| v.as_str()) {
             if m == "pulse" || m == "pipewire" || m == "auto" {
@@ -527,7 +537,8 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     ));
     out.push_str("    },\n");
     out.push_str("    \"smoothing\": {\n");
-    out.push_str(&format!("        \"noise_reduction\": {:.2}\n", cfg.noise_reduction));
+    out.push_str(&format!("        \"noise_reduction\": {:.2},\n", cfg.noise_reduction));
+    out.push_str(&format!("        \"wave_smoothing\": {:.2}\n", cfg.wave_smoothing));
     out.push_str("    },\n");
     out.push_str("    \"input\": {\n");
     out.push_str(&format!("        \"method\": {},\n", json_escape(&cfg.method)));
@@ -718,6 +729,27 @@ mod tests {
         let mut c2 = Config::default();
         assert!(config_load(&mut c2, &ps));
         assert_eq!(c2.chars, "▁▂▃▄▅▆▇█".as_bytes());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn wave_smoothing_loads_and_clamps() {
+        let mut c = Config::default();
+        assert_eq!(c.wave_smoothing, 0.5);
+        let text = r#"{"smoothing": {"noise_reduction": 0.2, "wave_smoothing": 0.8}}"#;
+        let path =
+            std::env::temp_dir().join(format!("sharkvis-wsm-{}.jsonc", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        assert!(config_load(&mut c, path.to_str().unwrap()));
+        assert_eq!(c.wave_smoothing, 0.8);
+        std::fs::write(&path, r#"{"smoothing": {"wave_smoothing": 99.0}}"#).unwrap();
+        assert!(config_load(&mut c, path.to_str().unwrap()));
+        assert_eq!(c.wave_smoothing, 0.95);
+        let ps = path.to_string_lossy().into_owned();
+        assert!(config_save(&c, &ps));
+        let mut c2 = Config::default();
+        assert!(config_load(&mut c2, &ps));
+        assert_eq!(c2.wave_smoothing, 0.95);
         let _ = std::fs::remove_file(&path);
     }
 

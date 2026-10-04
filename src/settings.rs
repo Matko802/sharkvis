@@ -31,7 +31,8 @@ const S_PROVIDER: usize = 18;
 const S_OFFSET: usize = 19;
 const S_COLORS: usize = 20;
 const S_ALIGN: usize = 21;
-const S_COUNT: usize = 22;
+const S_WAVESM: usize = 22;
+const S_COUNT: usize = 23;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -58,6 +59,7 @@ const LABELS: [&str; S_COUNT] = [
     "offset ms",
     "colors",
     "align",
+    "wave smooth",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -169,6 +171,13 @@ impl SettingsUi {
                 if v != cfg.noise_reduction {
                     cfg.noise_reduction = v;
                     *changed |= CH_DSP;
+                }
+            }
+            S_WAVESM => {
+                let v = clamp_d(cfg.wave_smoothing + dir as f64 * 0.05, 0.0, 0.95);
+                if v != cfg.wave_smoothing {
+                    cfg.wave_smoothing = v;
+                    *changed |= CH_LAYOUT;
                 }
             }
             S_LOW => {
@@ -356,6 +365,7 @@ impl SettingsUi {
             "lyrics" | "text" => {
                 rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_ALIGN, S_PROVIDER, S_OFFSET])
             }
+            "wave" => rows.extend_from_slice(&[S_WAVESM]),
             _ => {}
         }
         rows.sort_unstable();
@@ -551,6 +561,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         }
         S_MODE => cfg.mode.clone(),
         S_NOISE => format!("{:.2}", cfg.noise_reduction),
+        S_WAVESM => format!("{:.2}", cfg.wave_smoothing),
         S_SENS => format!("{:.0}", cfg.sensitivity),
         S_BARW => format!("{}", cfg.bar_width),
         S_SPACING => format!("{}", cfg.bar_spacing),
@@ -660,6 +671,7 @@ mod tests {
         let wave = rows_for("wave");
         assert!(!wave.contains(&S_BARS) && !wave.contains(&S_TEXTSIZE) && !wave.contains(&S_SENS));
         assert!(wave.contains(&S_MODE) && wave.contains(&S_FPS) && wave.contains(&S_RATE));
+        assert!(wave.contains(&S_WAVESM) && !wave.contains(&S_ALIGN));
         let scope = rows_for("oscilloscope");
         assert!(!scope.contains(&S_BARS) && !scope.contains(&S_TEXTSIZE));
         let lyr = rows_for("lyrics");

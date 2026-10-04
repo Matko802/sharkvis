@@ -60,6 +60,8 @@ pub struct Renderer {
     sc_hi2: Vec<i64>,
     sm_l: Vec<f64>,
     sm_r: Vec<f64>,
+    pub wave_sm: f64,
+    pub wave_fps: u32,
     text: Vec<char>,
     text_dim: Vec<bool>,
     focus: usize,
@@ -311,6 +313,8 @@ impl Renderer {
             sc_hi2: Vec::new(),
             sm_l: Vec::new(),
             sm_r: Vec::new(),
+            wave_sm: 0.5,
+            wave_fps: 60,
             text: "SHARKVIS".chars().collect(),
             text_dim: Vec::new(),
             focus: 0,
@@ -1602,10 +1606,11 @@ impl Renderer {
             } else {
                 vl
             };
-            let svl = 0.5 * vl + 0.5 * self.sm_l[c];
+            let k = self.wave_sm.clamp(0.0, 0.95).powf(60.0 / self.wave_fps.max(1) as f64);
+            let svl = (1.0 - k) * vl + k * self.sm_l[c];
             self.sm_l[c] = svl;
             let svr = if stereo {
-                let v = 0.5 * vr + 0.5 * self.sm_r[c];
+                let v = (1.0 - k) * vr + k * self.sm_r[c];
                 self.sm_r[c] = v;
                 v
             } else {

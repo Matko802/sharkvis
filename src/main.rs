@@ -311,6 +311,8 @@ fn apply_settings(
     rnd.bar_spacing = cfg.bar_spacing;
     rnd.color_256 = cfg.color_256;
     rnd.grad_amt = cfg.gradient_amt;
+    rnd.wave_sm = cfg.wave_smoothing;
+    rnd.wave_fps = cfg.framerate;
     apply_colors(rnd, cfg);
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
@@ -358,6 +360,11 @@ fn clamp_cfg(cfg: &mut Config) {
     }
     if cfg.noise_reduction > 1.0 {
         cfg.noise_reduction = 1.0;
+    }
+    if cfg.wave_smoothing.is_nan() {
+        cfg.wave_smoothing = 0.5;
+    } else {
+        cfg.wave_smoothing = cfg.wave_smoothing.clamp(0.0, 0.95);
     }
     if cfg.lower_cutoff < 1 {
         cfg.lower_cutoff = 1;
@@ -565,6 +572,8 @@ fn main() {
         bars,
     );
     apply_colors(&mut rnd, &cfg);
+    rnd.wave_sm = cfg.wave_smoothing;
+    rnd.wave_fps = cfg.framerate;
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
     rnd.set_glyphs(Some(&cfg.chars));
