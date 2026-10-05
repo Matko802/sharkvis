@@ -54,7 +54,6 @@ pub struct Renderer {
     stereo_in: bool,
     osc_glow: Vec<u8>,
     sc_yrow: Vec<i64>,
-    sc_yr: Vec<i64>,
     sc_lo: Vec<i64>,
     sc_hi: Vec<i64>,
     sc_lo2: Vec<i64>,
@@ -308,7 +307,6 @@ impl Renderer {
             stereo_in: false,
             osc_glow: vec![0; rows * cols],
             sc_yrow: Vec::new(),
-            sc_yr: Vec::new(),
             sc_lo: Vec::new(),
             sc_hi: Vec::new(),
             sc_lo2: Vec::new(),
@@ -1556,8 +1554,7 @@ impl Renderer {
             return;
         }
         if self.sc_yrow.len() < ncol {
-            self.sc_yrow.resize(ncol, i64::MIN);
-            self.sc_yr.resize(ncol, i64::MIN);
+            self.sc_yrow.resize(ncol, 0);
             self.sc_lo.resize(ncol, 0);
             self.sc_hi.resize(ncol, 0);
             self.sc_lo2.resize(ncol, 0);
@@ -1619,24 +1616,8 @@ impl Renderer {
             } else {
                 svl
             };
-            let fl = center - svl * height + 0.5;
-            let fr = center - svr * height + 0.5;
-            let drawn_l = self.sc_yrow[c];
-            let yl = if drawn_l == i64::MIN || (fl - drawn_l as f64).abs() >= 1.0 {
-                let y = fl as i64;
-                self.sc_yrow[c] = y;
-                y
-            } else {
-                drawn_l
-            };
-            let drawn_r = self.sc_yr[c];
-            let yr = if drawn_r == i64::MIN || (fr - drawn_r as f64).abs() >= 1.0 {
-                let y = fr as i64;
-                self.sc_yr[c] = y;
-                y
-            } else {
-                drawn_r
-            };
+            let yl = (center - svl * height + 0.5) as i64;
+            let yr = (center - svr * height + 0.5) as i64;
 
             let (mut llo, mut lhi) = (yl, yl);
             if let Some(q) = pl {
@@ -1952,39 +1933,6 @@ mod tests {
         assert!(Renderer::mode_parse("text") == RenderMode::Lyrics);
         assert!(Renderer::mode_parse("wave") == RenderMode::Wave);
         assert!(Renderer::mode_parse("nope") == RenderMode::Bars);
-    }
-
-    #[test]
-    fn wave_converges_to_silence() {
-        use std::f64::consts::PI;
-        let mut r = Renderer::new(24, 80, 2, 1, 8);
-        r.mode = RenderMode::Wave;
-        r.set_wave(48000);
-        let n = 2048;
-        let mut l = vec![0.0; n];
-        let rr = vec![0.0; n];
-        for i in 0..n {
-            l[i] = (2.0 * PI * 440.0 * i as f64 / 48000.0).sin() * 0.8;
-        }
-        r.feed(Some(&l), Some(&rr), n);
-        let mut sizes = Vec::new();
-        for _ in 0..12 {
-            let mut out = Vec::new();
-            r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
-            sizes.push(out.len());
-        }
-        assert!(sizes[0] > 0, "first draw must emit");
-        assert!(
-            *sizes.last().unwrap() < sizes[0] / 4,
-            "must converge, got {:?}",
-            sizes
-        );
-        assert_eq!(
-            *sizes.last().unwrap(),
-            0,
-            "settled frames must emit nothing, got {:?}",
-            sizes
-        );
     }
 
     #[test]
