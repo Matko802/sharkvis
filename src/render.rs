@@ -1607,12 +1607,22 @@ impl Renderer {
                 vl
             };
             let k = self.wave_sm.clamp(0.0, 0.95).powf(60.0 / self.wave_fps.max(1) as f64);
-            let svl = (1.0 - k) * vl + k * self.sm_l[c];
-            self.sm_l[c] = svl;
-            let svr = if stereo {
-                let v = (1.0 - k) * vr + k * self.sm_r[c];
-                self.sm_r[c] = v;
+            let quiet = vl.abs() < 0.01 && (!stereo || vr.abs() < 0.01);
+            let svl = if quiet {
+                self.sm_l[c]
+            } else {
+                let v = (1.0 - k) * vl + k * self.sm_l[c];
+                self.sm_l[c] = v;
                 v
+            };
+            let svr = if stereo {
+                if quiet {
+                    self.sm_r[c]
+                } else {
+                    let v = (1.0 - k) * vr + k * self.sm_r[c];
+                    self.sm_r[c] = v;
+                    v
+                }
             } else {
                 svl
             };
@@ -1973,6 +1983,35 @@ mod tests {
             "silent R must sit at center, got {:?}",
             &r.sc_lo2[..8]
         );
+    }
+
+    #[test]
+    fn wave_freezes_on_silence() {
+        use std::f64::consts::PI;
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.mode = RenderMode::Wave;
+        r.set_wave(48000);
+        let n = 2048;
+        let mut l = vec![0.0; n];
+        let rr = vec![0.0; n];
+        for i in 0..n {
+            l[i] = (2.0 * PI * 440.0 * i as f64 / 48000.0).sin() * 0.8;
+        }
+        r.feed(Some(&l), Some(&rr), n);
+        let mut out = Vec::new();
+        r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        assert!(!out.is_empty());
+        let held_l = r.sm_l.clone();
+        let held_r = r.sm_r.clone();
+        let zeros = vec![0.0; n];
+        r.feed(Some(&zeros), Some(&zeros), n);
+        let mut out = Vec::new();
+        r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        assert_eq!(r.sm_l, held_l);
+        assert_eq!(r.sm_r, held_r);
+        let mut out = Vec::new();
+        r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        assert!(out.is_empty(), "silent frames must emit nothing");
     }
 
     #[test]
