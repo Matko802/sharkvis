@@ -1607,22 +1607,17 @@ impl Renderer {
                 vl
             };
             let k = self.wave_sm.clamp(0.0, 0.95).powf(60.0 / self.wave_fps.max(1) as f64);
-            let quiet = vl.abs() < 0.01 && (!stereo || vr.abs() < 0.01);
-            let svl = if quiet {
-                self.sm_l[c]
+            let (vl, vr) = if vl.abs() < 0.01 && (!stereo || vr.abs() < 0.01) {
+                (0.0, 0.0)
             } else {
-                let v = (1.0 - k) * vl + k * self.sm_l[c];
-                self.sm_l[c] = v;
-                v
+                (vl, vr)
             };
+            let svl = (1.0 - k) * vl + k * self.sm_l[c];
+            self.sm_l[c] = svl;
             let svr = if stereo {
-                if quiet {
-                    self.sm_r[c]
-                } else {
-                    let v = (1.0 - k) * vr + k * self.sm_r[c];
-                    self.sm_r[c] = v;
-                    v
-                }
+                let v = (1.0 - k) * vr + k * self.sm_r[c];
+                self.sm_r[c] = v;
+                v
             } else {
                 svl
             };
@@ -1986,7 +1981,7 @@ mod tests {
     }
 
     #[test]
-    fn wave_freezes_on_silence() {
+    fn wave_relaxes_to_flat_on_silence() {
         use std::f64::consts::PI;
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.mode = RenderMode::Wave;
@@ -2001,17 +1996,19 @@ mod tests {
         let mut out = Vec::new();
         r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         assert!(!out.is_empty());
-        let held_l = r.sm_l.clone();
-        let held_r = r.sm_r.clone();
+        let loud: Vec<f64> = r.sm_l.clone();
+        assert!(loud.iter().any(|&v| v.abs() > 0.01));
         let zeros = vec![0.0; n];
         r.feed(Some(&zeros), Some(&zeros), n);
+        for _ in 0..12 {
+            let mut out = Vec::new();
+            r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        }
+        assert!(r.sm_l.iter().all(|&v| v.abs() < 0.01));
+        assert!(r.sm_r.iter().all(|&v| v.abs() < 0.01));
         let mut out = Vec::new();
         r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
-        assert_eq!(r.sm_l, held_l);
-        assert_eq!(r.sm_r, held_r);
-        let mut out = Vec::new();
-        r.draw_wave(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
-        assert!(out.is_empty(), "silent frames must emit nothing");
+        assert!(out.is_empty(), "settled flat line must emit nothing");
     }
 
     #[test]
