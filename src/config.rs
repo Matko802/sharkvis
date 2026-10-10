@@ -160,6 +160,29 @@ pub fn config_default_path() -> String {
     "./config.jsonc".to_string()
 }
 
+pub fn parse_index_spec(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Ok(v) = t.parse::<i64>() {
+        if (30..=37).contains(&v) || (90..=97).contains(&v) {
+            return Some(format!("{v}"));
+        }
+        return None;
+    }
+    let mut parts = t.split(';').map(str::trim);
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("38"), Some("5"), Some(n), None) => {
+            if n.parse::<u32>().is_ok_and(|x| x <= 255) {
+                return Some(format!("38;5;{n}"));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 pub fn color_to_rgb_any(s: &str) -> Option<(u32, u32, u32)> {
     let t = s.trim();
     if t.is_empty() {
@@ -621,6 +644,20 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_specs_parse() {
+        assert_eq!(parse_index_spec("34"), Some("34".to_string()));
+        assert_eq!(parse_index_spec("97"), Some("97".to_string()));
+        assert_eq!(
+            parse_index_spec("38;5;196"),
+            Some("38;5;196".to_string())
+        );
+        assert_eq!(parse_index_spec("1;36"), None);
+        assert_eq!(parse_index_spec("#ff0000"), None);
+        assert_eq!(parse_index_spec("red"), None);
+        assert_eq!(parse_index_spec(""), None);
+    }
 
     #[test]
     fn jsonc_load_with_comments() {

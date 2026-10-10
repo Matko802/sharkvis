@@ -24,6 +24,7 @@ pub struct Renderer {
     pub grad_lo: u32,
     pub grad_hi: u32,
     pub grad_amt: u32,
+    pub grad_idx: Option<(String, String)>,
     pub mode: RenderMode,
     x_off: usize,
     prev: Vec<u8>,
@@ -33,7 +34,7 @@ pub struct Renderer {
     db_x1: usize,
     db_y1: usize,
     row_col: Vec<Vec<u8>>,
-    grad_sig: (u32, u32, bool, usize, u32),
+    grad_sig: (u32, u32, bool, usize, u32, Option<(String, String)>),
     barstr: [Vec<u8>; 9],
     spacestr: Vec<u8>,
     barstr_bw: usize,
@@ -170,12 +171,6 @@ impl Renderer {
     }
 
     fn bar_color(&self, from_bottom: u32, rows: u32) -> Vec<u8> {
-        let lo_r = (self.grad_lo >> 16) & 0xff;
-        let lo_g = (self.grad_lo >> 8) & 0xff;
-        let lo_b = self.grad_lo & 0xff;
-        let hi_r = (self.grad_hi >> 16) & 0xff;
-        let hi_g = (self.grad_hi >> 8) & 0xff;
-        let hi_b = self.grad_hi & 0xff;
         let mut frac = if rows > 1 {
             from_bottom as f64 / (rows - 1) as f64
         } else {
@@ -188,6 +183,16 @@ impl Renderer {
         } else {
             (frac * n).floor().min(n - 1.0) / (n - 1.0)
         };
+        if let Some((lo, hi)) = self.grad_idx.as_ref() {
+            let spec = if frac < 0.5 { lo } else { hi };
+            return format!("\x1b[{spec}m").into_bytes();
+        }
+        let lo_r = (self.grad_lo >> 16) & 0xff;
+        let lo_g = (self.grad_lo >> 8) & 0xff;
+        let lo_b = self.grad_lo & 0xff;
+        let hi_r = (self.grad_hi >> 16) & 0xff;
+        let hi_g = (self.grad_hi >> 8) & 0xff;
+        let hi_b = self.grad_hi & 0xff;
         let mut cr = (lo_r as f64 + (hi_r as f64 - lo_r as f64) * frac + 0.5) as u32;
         let mut cg = (lo_g as f64 + (hi_g as f64 - lo_g as f64) * frac + 0.5) as u32;
         let mut cb = (lo_b as f64 + (hi_b as f64 - lo_b as f64) * frac + 0.5) as u32;
@@ -225,6 +230,7 @@ impl Renderer {
             self.color_256,
             self.rows,
             self.grad_amt,
+            self.grad_idx.clone(),
         );
         if self.grad_sig == sig {
             return;
@@ -277,6 +283,7 @@ impl Renderer {
             grad_lo: 0xff0000u32,
             grad_hi: 0x00ff00u32,
             grad_amt: 100,
+            grad_idx: None,
             mode: RenderMode::Bars,
             x_off: 0,
             prev: vec![0xFF; rows * cols],
@@ -286,7 +293,7 @@ impl Renderer {
             db_x1: if cols > 0 { cols - 1 } else { 0 },
             db_y1: if rows > 0 { rows - 1 } else { 0 },
             row_col: vec![Vec::new(); rows],
-            grad_sig: (0, 0, false, 0, 100),
+            grad_sig: (0, 0, false, 0, 100, None),
             barstr: Default::default(),
             spacestr: Vec::new(),
             barstr_bw: 0,
@@ -337,7 +344,7 @@ impl Renderer {
         self.prev = vec![0xFF; rows * cols];
         self.osc_glow = vec![0; rows * cols];
         self.row_col = vec![Vec::new(); rows];
-        self.grad_sig = (0, 0, false, 0, 100);
+        self.grad_sig = (0, 0, false, 0, 100, None);
         self.rowbuf = vec![0; cols];
         self.db_x0 = 0;
         self.db_y0 = 0;
@@ -676,13 +683,17 @@ impl Renderer {
     }
 
     fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
+        let t = xfrac.clamp(0.0, 1.0);
+        if let Some((lo, hi)) = self.grad_idx.as_ref() {
+            let spec = if t < 0.5 { lo } else { hi };
+            return format!("\x1b[{spec}m").into_bytes();
+        }
         let lo_r = ((self.grad_lo >> 16) & 0xff) as f64;
         let lo_g = ((self.grad_lo >> 8) & 0xff) as f64;
         let lo_b = (self.grad_lo & 0xff) as f64;
         let hi_r = ((self.grad_hi >> 16) & 0xff) as f64;
         let hi_g = ((self.grad_hi >> 8) & 0xff) as f64;
         let hi_b = (self.grad_hi & 0xff) as f64;
-        let t = xfrac.clamp(0.0, 1.0);
         let b = 0.10 + 0.90 * v.clamp(0.0, 1.0);
         let mix = |l: f64, h: f64| ((l + (h - l) * t) * b + 0.5).clamp(0.0, 255.0) as u32;
         let (cr, cg, cb) = (mix(lo_r, hi_r), mix(lo_g, hi_g), mix(lo_b, hi_b));
@@ -2050,6 +2061,18 @@ mod tests {
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("\x1b[38;2;64;64;64m"), "second line must restart at low, got {:?}", &text[..text.len().min(200)]);
         assert!(!text.contains("\x1b[38;2;160;160;160m"), "no global-index bleed");
+    }
+
+    #[test]
+    fn indexed_bar_color_uses_theme_indexes() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.grad_idx = Some(("34".to_string(), "36".to_string()));
+        r.grad_amt = 2;
+        assert_eq!(r.bar_color(0, 8), b"\x1b[34m".to_vec());
+        assert_eq!(r.bar_color(7, 8), b"\x1b[36m".to_vec());
+        r.grad_idx = Some(("36".to_string(), "36".to_string()));
+        assert_eq!(r.bar_color(0, 8), b"\x1b[36m".to_vec());
+        assert_eq!(r.bar_color(7, 8), b"\x1b[36m".to_vec());
     }
 
     #[test]

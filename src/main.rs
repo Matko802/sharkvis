@@ -19,7 +19,7 @@ mod state;
 mod term;
 
 use crate::audio::Audio;
-use crate::config::{color_to_rgb_any, config_default_path, config_load, config_save, Config};
+use crate::config::{config_default_path, config_load, config_save, Config};
 use crate::dsp::Dsp;
 use crate::lyrics::{FetchOpts, LyricWorker};
 use crate::mpris::{poll_named, poll_position, poll_track, Track};
@@ -195,8 +195,37 @@ fn distinct_pair(lo: (u8, u8, u8), hi: (u8, u8, u8)) -> ((u8, u8, u8), (u8, u8, 
     (lo, (mix(lo.0), mix(lo.1), mix(lo.2)))
 }
 
-fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
-    use crate::config::color_to_rgb_any;
+fn parse_logo_specs_text(text: &str) -> Option<(String, String)> {
+    let mut lo = None;
+    let mut hi = None;
+    for tok in text.split(|c: char| c.is_whitespace() || c == ',') {
+        if let Some(v) = tok.strip_prefix("low=") {
+            if !v.is_empty() {
+                lo = Some(v.to_string());
+            }
+        } else if let Some(v) = tok.strip_prefix("high=") {
+            if !v.is_empty() {
+                hi = Some(v.to_string());
+            }
+        }
+    }
+    match (lo, hi) {
+        (Some(l), Some(h)) => Some((l, h)),
+        _ => None,
+    }
+}
+
+fn logo_specs() -> Option<(String, String)> {
+    if let Ok(p) = std::env::var("SHARKVIS_LOGO_COLORS") {
+        if !p.trim().is_empty() {
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                if let Some(pair) = parse_logo_specs_text(&text) {
+                    return Some(pair);
+                }
+            }
+            return None;
+        }
+    }
     let uid = unsafe { libc::getuid() };
     let mut paths = Vec::new();
     if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
@@ -211,52 +240,86 @@ fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
             Ok(t) => t,
             Err(_) => continue,
         };
-        let mut lo = None;
-        let mut hi = None;
-        for tok in text.split(|c: char| c.is_whitespace() || c == ',') {
-            if let Some(v) = tok.strip_prefix("low=") {
-                if color_to_rgb_any(v).is_some() {
-                    lo = Some(v.to_string());
-                }
-            } else if let Some(v) = tok.strip_prefix("high=") {
-                if color_to_rgb_any(v).is_some() {
-                    hi = Some(v.to_string());
-                }
-            }
-        }
-        if let (Some(l), Some(h)) = (lo, hi) {
-            let (lr, lg, lb) = color_to_rgb_any(&l).unwrap();
-            let (hr, hg, hb) = color_to_rgb_any(&h).unwrap();
-            return Some(distinct_pair(
-                (lr as u8, lg as u8, lb as u8),
-                (hr as u8, hg as u8, hb as u8),
-            ));
+        if let Some(pair) = parse_logo_specs_text(&text) {
+            return Some(pair);
         }
     }
     None
 }
 
+fn apply_spec_pair(rnd: &mut Renderer, lo_spec: &str, hi_spec: &str, synth: bool) -> bool {
+    use crate::config::{color_to_rgb_any, parse_index_spec};
+    let lo_idx = parse_index_spec(lo_spec);
+    let hi_idx = parse_index_spec(hi_spec);
+    if let (Some(a), Some(b)) = (lo_idx, hi_idx) {
+        rnd.grad_idx = Some((a, b));
+        return true;
+    }
+    let lo_rgb = color_to_rgb_any(lo_spec);
+    let hi_rgb = color_to_rgb_any(hi_spec);
+    match (lo_rgb, hi_rgb) {
+        (Some((lr, lg, lb)), Some((hr, hg, hb))) => {
+            let (lo, hi) = if synth {
+                distinct_pair(
+                    (lr as u8, lg as u8, lb as u8),
+                    (hr as u8, hg as u8, hb as u8),
+                )
+            } else {
+                (
+                    (lr as u8, lg as u8, lb as u8),
+                    (hr as u8, hg as u8, hb as u8),
+                )
+            };
+            rnd.grad_lo = ((lo.0 as u32) << 16) | ((lo.1 as u32) << 8) | lo.2 as u32;
+            rnd.grad_hi = ((hi.0 as u32) << 16) | ((hi.1 as u32) << 8) | hi.2 as u32;
+            rnd.grad_idx = None;
+            true
+        }
+        _ => {
+            let mut ok = false;
+            if let Some((r, g, b)) = lo_rgb {
+                rnd.grad_lo = (r << 16) | (g << 8) | b;
+                ok = true;
+            }
+            if let Some((r, g, b)) = hi_rgb {
+                rnd.grad_hi = (r << 16) | (g << 8) | b;
+                ok = true;
+            }
+            if ok {
+                rnd.grad_idx = None;
+            }
+            ok
+        }
+    }
+}
+
 fn apply_colors(rnd: &mut Renderer, cfg: &Config) {
-    let before = (rnd.grad_lo, rnd.grad_hi, rnd.color_256, rnd.grad_amt);
+    let before = (
+        rnd.grad_lo,
+        rnd.grad_hi,
+        rnd.color_256,
+        rnd.grad_amt,
+        rnd.grad_idx.clone(),
+    );
     rnd.color_256 = cfg.color_256;
     rnd.grad_amt = cfg.gradient_amt;
     let mut done = false;
     if config_use_jefetch_colors(cfg) {
-        if let Some(((lr, lg, lb), (hr, hg, hb))) = logo_gradient() {
-            rnd.grad_lo = ((lr as u32) << 16) | ((lg as u32) << 8) | lb as u32;
-            rnd.grad_hi = ((hr as u32) << 16) | ((hg as u32) << 8) | hb as u32;
-            done = true;
+        if let Some((lo, hi)) = logo_specs() {
+            done = apply_spec_pair(rnd, &lo, &hi, true);
         }
     }
     if !done {
-        if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_low) {
-            rnd.grad_lo = (r << 16) | (g << 8) | b;
-        }
-        if let Some((r, g, b)) = color_to_rgb_any(&cfg.gradient_high) {
-            rnd.grad_hi = (r << 16) | (g << 8) | b;
-        }
+        apply_spec_pair(rnd, &cfg.gradient_low, &cfg.gradient_high, false);
     }
-    if (rnd.grad_lo, rnd.grad_hi, rnd.color_256, rnd.grad_amt) != before {
+    let after = (
+        rnd.grad_lo,
+        rnd.grad_hi,
+        rnd.color_256,
+        rnd.grad_amt,
+        rnd.grad_idx.clone(),
+    );
+    if after != before {
         rnd.clear();
     }
 }
@@ -976,19 +1039,34 @@ fn main() {
                 }
             }
 
-            let lo_u = rnd.grad_lo;
-            let hi_u = rnd.grad_hi;
-            let lo = (
-                ((lo_u >> 16) & 0xff) as u8,
-                ((lo_u >> 8) & 0xff) as u8,
-                (lo_u & 0xff) as u8,
+            let ends = match rnd.grad_idx.clone() {
+                Some((lo, hi)) => crate::state::LiveEnds::Idx(lo, hi),
+                _ => {
+                    let lo_u = rnd.grad_lo;
+                    let hi_u = rnd.grad_hi;
+                    crate::state::LiveEnds::Rgb(
+                        (
+                            ((lo_u >> 16) & 0xff) as u8,
+                            ((lo_u >> 8) & 0xff) as u8,
+                            (lo_u & 0xff) as u8,
+                        ),
+                        (
+                            ((hi_u >> 16) & 0xff) as u8,
+                            ((hi_u >> 8) & 0xff) as u8,
+                            (hi_u & 0xff) as u8,
+                        ),
+                    )
+                }
+            };
+            live.update(
+                energy,
+                bass,
+                left,
+                right,
+                &ends,
+                dsp[0].sens,
+                cfg.gradient_amt,
             );
-            let hi = (
-                ((hi_u >> 16) & 0xff) as u8,
-                ((hi_u >> 8) & 0xff) as u8,
-                (hi_u & 0xff) as u8,
-            );
-            live.update(energy, bass, left, right, lo, hi, dsp[0].sens, cfg.gradient_amt);
         }
 
         if last_color_check.elapsed() >= Duration::from_millis(1000) {
@@ -1008,9 +1086,10 @@ fn main() {
                 }
             }
             if config_use_jefetch_colors(&cfg) {
-                let before = (rnd.grad_lo, rnd.grad_hi);
+                let before = (rnd.grad_lo, rnd.grad_hi, rnd.grad_idx.clone());
                 apply_colors(&mut rnd, &cfg);
-                if (rnd.grad_lo, rnd.grad_hi) != before {
+                let after = (rnd.grad_lo, rnd.grad_hi, rnd.grad_idx.clone());
+                if after != before {
                     force_draw = true;
                 }
             }
@@ -1215,4 +1294,51 @@ fn main() {
     state::clear_state_file();
 
     std::process::exit(rc);
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logo_specs_text_parses() {
+        assert_eq!(
+            parse_logo_specs_text("low=34 high=36"),
+            Some(("34".to_string(), "36".to_string()))
+        );
+        assert_eq!(
+            parse_logo_specs_text("low=#112233 high=#aabbcc\n"),
+            Some(("#112233".to_string(), "#aabbcc".to_string()))
+        );
+        assert_eq!(parse_logo_specs_text("low=34"), None);
+        assert_eq!(parse_logo_specs_text("nothing here"), None);
+    }
+
+    #[test]
+    fn logo_specs_override_isolated() {
+        let path = std::env::temp_dir().join(format!("sharkvis-logo-specs-{}", std::process::id()));
+        std::fs::write(&path, "low=34 high=36\n").unwrap();
+        std::env::set_var("SHARKVIS_LOGO_COLORS", &path);
+        assert_eq!(
+            logo_specs(),
+            Some(("34".to_string(), "36".to_string()))
+        );
+        std::env::set_var("SHARKVIS_LOGO_COLORS", "/nonexistent-sharkvis-logo-colors");
+        assert_eq!(logo_specs(), None);
+        std::env::remove_var("SHARKVIS_LOGO_COLORS");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn spec_pair_prefers_indexes() {
+        let mut rnd = Renderer::new(24, 80, 2, 1, 8);
+        assert!(apply_spec_pair(&mut rnd, "34", "36", true));
+        assert_eq!(
+            rnd.grad_idx,
+            Some(("34".to_string(), "36".to_string()))
+        );
+        assert!(apply_spec_pair(&mut rnd, "#112233", "#aabbcc", true));
+        assert_eq!(rnd.grad_idx, None);
+        assert_eq!(rnd.grad_lo, 0x112233);
+        assert_eq!(rnd.grad_hi, 0xaabbcc);
+    }
 }

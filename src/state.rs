@@ -2,6 +2,11 @@ use std::time::{Duration, Instant};
 
 const WRITE_EVERY: Duration = Duration::from_millis(50);
 
+pub enum LiveEnds {
+    Rgb((u8, u8, u8), (u8, u8, u8)),
+    Idx(String, String),
+}
+
 pub struct StateWriter {
     path: Option<String>,
     custom: bool,
@@ -33,7 +38,7 @@ impl StateWriter {
         }
     }
 
-    pub fn update(&mut self, energy: f64, bass: f64, left: f64, right: f64, low: (u8, u8, u8), high: (u8, u8, u8), sens: f64, grad_amt: u32) {
+    pub fn update(&mut self, energy: f64, bass: f64, left: f64, right: f64, ends: &LiveEnds, sens: f64, grad_amt: u32) {
         let now = Instant::now();
         let dt = self
             .last_tick
@@ -63,15 +68,26 @@ impl StateWriter {
             }
         }
         let amt = grad_amt.clamp(1, 256);
-        let (r, g, b) = if amt <= 1 {
-            low
-        } else {
-            let n = amt as f64;
-            let tq = (e as f64).clamp(0.0, 1.0);
-            lerp_rgb(low, high, ((tq * n).floor().min(n - 1.0) / (n - 1.0)) as f32)
+        let (color_field, low_field, high_field) = match ends {
+            LiveEnds::Rgb(low, high) => {
+                let (r, g, b) = if amt <= 1 {
+                    *low
+                } else {
+                    let n = amt as f64;
+                    let tq = (e as f64).clamp(0.0, 1.0);
+                    lerp_rgb(*low, *high, ((tq * n).floor().min(n - 1.0) / (n - 1.0)) as f32)
+                };
+                (
+                    format!("#{:02x}{:02x}{:02x}", r, g, b),
+                    format!("#{:02x}{:02x}{:02x}", low.0, low.1, low.2),
+                    format!("#{:02x}{:02x}{:02x}", high.0, high.1, high.2),
+                )
+            }
+            LiveEnds::Idx(lo, hi) => {
+                let cur = if e < 0.5 { lo } else { hi };
+                (cur.clone(), lo.clone(), hi.clone())
+            }
         };
-        let (lr, lg, lb) = low;
-        let (hr, hg, hb) = high;
         let l = left.clamp(0.0, 1.0);
         let rr = right.clamp(0.0, 1.0);
 
@@ -81,8 +97,8 @@ impl StateWriter {
             String::new()
         };
         let body = format!(
-            "color=#{:02x}{:02x}{:02x} energy={:.2} beat={:.2} color_low=#{:02x}{:02x}{:02x} color_high=#{:02x}{:02x}{:02x} bass={:.2} left={:.2} right={:.2} gradient={} started={} pid={}{}\n",
-            r, g, b, e, beat, lr, lg, lb, hr, hg, hb, bass.clamp(0.0, 1.0), l, rr,
+            "color={} energy={:.2} beat={:.2} color_low={} color_high={} bass={:.2} left={:.2} right={:.2} gradient={} started={} pid={}{}\n",
+            color_field, e, beat, low_field, high_field, bass.clamp(0.0, 1.0), l, rr,
             amt, self.started_ms, self.pid, sens_field
         );
 
@@ -695,7 +711,7 @@ mod tests {
         std::env::set_var("SHARKVIS_NO_STATE", "1");
         let mut w = StateWriter::new();
         assert!(w.path.is_none());
-        w.update(0.9, 0.9, 0.9, 0.9, (0, 0, 0), (255, 255, 255), 100.0, 100);
+        w.update(0.9, 0.9, 0.9, 0.9, &LiveEnds::Rgb((0, 0, 0), (255, 255, 255)), 100.0, 100);
         std::env::remove_var("SHARKVIS_NO_STATE");
     }
 
@@ -709,7 +725,7 @@ mod tests {
         w.path = Some(path.clone());
         w.dir_ready = true;
         for _ in 0..5 {
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 100.0, 100);
+            w.update(0.5, 0.4, 0.5, 0.5, &LiveEnds::Rgb((0, 0, 255), (255, 0, 0)), 100.0, 100);
             std::thread::sleep(std::time::Duration::from_millis(60));
         }
         let text = std::fs::read_to_string(&path).unwrap();
@@ -720,6 +736,24 @@ mod tests {
             !std::path::Path::new(&format!("{}.tmp", path)).exists(),
             "no temp leftovers"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn indexed_ends_write_specs() {
+        let path = std::env::temp_dir().join(format!("sharkvis-indexed-{}", std::process::id()));
+        let path = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&path);
+        let mut w = StateWriter::new();
+        w.path = Some(path.clone());
+        w.dir_ready = true;
+        let ends = LiveEnds::Idx("34".to_string(), "36".to_string());
+        w.update(0.2, 0.2, 0.2, 0.2, &ends, 100.0, 100);
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        w.update(0.8, 0.8, 0.8, 0.8, &ends, 100.0, 100);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("color_low=34"), "spec bounds, got {}", text);
+        assert!(text.contains("color_high=36"), "spec bounds, got {}", text);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -841,7 +875,7 @@ mod tests {
         with_state_path(&path, || {
             let mut w = StateWriter::new();
             assert!(w.custom, "override is a custom path");
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 100.0, 100);
+            w.update(0.5, 0.4, 0.5, 0.5, &LiveEnds::Rgb((0, 0, 255), (255, 0, 0)), 100.0, 100);
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(text.contains("started="), "session id published, got {}", text);
             assert!(text.contains(&format!("pid={}", own_pid())), "got {}", text);
@@ -856,7 +890,7 @@ mod tests {
         with_xdg_rt(&rt, || {
             let mut w = StateWriter::new();
             assert!(!w.custom);
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 100.0, 100);
+            w.update(0.5, 0.4, 0.5, 0.5, &LiveEnds::Rgb((0, 0, 255), (255, 0, 0)), 100.0, 100);
             let legacy = format!("{}/sharkvis/state", rt);
             let sess = format!("{}/sharkvis/state-{}", rt, own_pid());
             let a = std::fs::read_to_string(&legacy).unwrap();
@@ -927,7 +961,7 @@ mod tests {
             let mut w = StateWriter::new();
             w.path = Some(path.clone());
             w.dir_ready = true;
-            w.update(0.5, 0.4, 0.5, 0.5, (0, 0, 255), (255, 0, 0), 7.654321, 100);
+            w.update(0.5, 0.4, 0.5, 0.5, &LiveEnds::Rgb((0, 0, 255), (255, 0, 0)), 7.654321, 100);
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(text.contains("sens=7.654321"), "sens field, got {}", text);
             let got = read_sens();
