@@ -195,6 +195,260 @@ fn distinct_pair(lo: (u8, u8, u8), hi: (u8, u8, u8)) -> ((u8, u8, u8), (u8, u8, 
     (lo, (mix(lo.0), mix(lo.1), mix(lo.2)))
 }
 
+const VGA_DEFAULTS: [(u8, u8, u8); 16] = [
+    (0, 0, 0),
+    (170, 0, 0),
+    (0, 170, 0),
+    (170, 85, 0),
+    (0, 0, 170),
+    (170, 0, 170),
+    (0, 170, 170),
+    (170, 170, 170),
+    (85, 85, 85),
+    (255, 85, 85),
+    (85, 255, 85),
+    (255, 255, 85),
+    (85, 85, 255),
+    (255, 85, 255),
+    (85, 255, 255),
+    (255, 255, 255),
+];
+
+fn map_raw_through_term(raw: (u8, u8, u8), pal: &[(u8, u8, u8); 16]) -> (u8, u8, u8) {
+    for (i, vga) in VGA_DEFAULTS.iter().enumerate() {
+        if *vga == raw {
+            return pal[i];
+        }
+    }
+    raw
+}
+
+fn osc4_hex_comp(s: &str) -> Option<u32> {
+    if s.is_empty() || s.len() > 4 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let v = u32::from_str_radix(s, 16).ok()?;
+    let max: u32 = match s.len() {
+        1 => 15,
+        2 => 255,
+        3 => 4095,
+        _ => 65535,
+    };
+    Some((v * 255 + max / 2) / max)
+}
+
+fn parse_osc4_spec(s: &str) -> Option<(u8, u8, u8)> {
+    if let Some(rest) = s.strip_prefix("rgb:") {
+        let mut it = rest.split('/');
+        let r = osc4_hex_comp(it.next()?)?;
+        let g = osc4_hex_comp(it.next()?)?;
+        let b = osc4_hex_comp(it.next()?)?;
+        if it.next().is_some() {
+            return None;
+        }
+        return Some((r as u8, g as u8, b as u8));
+    }
+    if let Some(hex) = s.strip_prefix('#') {
+        if hex.len() != 3 && hex.len() != 6 {
+            return None;
+        }
+        let w = hex.len() / 3;
+        let mut c = [0u32; 3];
+        for k in 0..3 {
+            c[k] = osc4_hex_comp(&hex[k * w..(k + 1) * w])?;
+        }
+        return Some((c[0] as u8, c[1] as u8, c[2] as u8));
+    }
+    None
+}
+
+fn osc4_parse(buf: &[u8], pal: &mut [(u8, u8, u8); 16], have: &mut [bool; 16]) {
+    let mut i = 0;
+    while i + 5 < buf.len() {
+        if buf[i] != 0x1b || buf[i + 1] != b']' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 2;
+        if j + 1 >= buf.len() || buf[j] != b'4' || buf[j + 1] != b';' {
+            i += 1;
+            continue;
+        }
+        j += 2;
+        let mut idx: usize = 0;
+        let mut digits = 0;
+        while j < buf.len() && buf[j].is_ascii_digit() {
+            idx = idx * 10 + (buf[j] - b'0') as usize;
+            digits += 1;
+            j += 1;
+        }
+        if digits == 0 || idx > 15 {
+            i += 1;
+            continue;
+        }
+        if j >= buf.len() || (buf[j] != b';' && buf[j] != b':') {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        let s = j;
+        while j < buf.len()
+            && buf[j] != 0x07
+            && !(buf[j] == 0x1b && j + 1 < buf.len() && buf[j + 1] == b'\\')
+        {
+            j += 1;
+        }
+        if j >= buf.len() {
+            break;
+        }
+        if j > s {
+            if let Ok(spec) = std::str::from_utf8(&buf[s..j]) {
+                if !have[idx] {
+                    if let Some(c) = parse_osc4_spec(spec) {
+                        pal[idx] = c;
+                        have[idx] = true;
+                    }
+                }
+            }
+        }
+        i = j;
+    }
+}
+
+fn osc4_query_uncached() -> Option<[(u8, u8, u8); 16]> {
+    let term_ok = match std::env::var("TERM") {
+        Ok(t) => !t.is_empty() && !t.eq_ignore_ascii_case("dumb"),
+        Err(_) => false,
+    };
+    if !term_ok {
+        return None;
+    }
+    let fd = unsafe {
+        libc::open(
+            b"/dev/tty\0".as_ptr() as *const libc::c_char,
+            libc::O_RDWR | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    let mut orig: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(fd, &mut orig) } != 0 {
+        unsafe { libc::close(fd) };
+        return None;
+    }
+    let mut raw = orig;
+    raw.c_lflag &= !(libc::ICANON | libc::ECHO);
+    raw.c_cc[libc::VMIN as usize] = 0;
+    raw.c_cc[libc::VTIME as usize] = 1;
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
+        unsafe { libc::close(fd) };
+        return None;
+    }
+    let mut req = Vec::new();
+    for i in 0..16 {
+        req.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
+    }
+    let mut wr = 0;
+    while wr < req.len() {
+        let k = unsafe {
+            libc::write(
+                fd,
+                req[wr..].as_ptr() as *const libc::c_void,
+                (req.len() - wr) as libc::size_t,
+            )
+        };
+        if k <= 0 {
+            break;
+        }
+        wr += k as usize;
+    }
+    let mut pal = [(0u8, 0u8, 0u8); 16];
+    let mut have = [false; 16];
+    let mut buf = vec![0u8; 4096];
+    let mut bl = 0usize;
+    let mut empty = 0;
+    for _ in 0..6 {
+        if have.iter().all(|x| *x) || bl + 64 >= buf.len() {
+            break;
+        }
+        let k = unsafe {
+            libc::read(
+                fd,
+                buf[bl..].as_mut_ptr() as *mut libc::c_void,
+                (buf.len() - bl - 1) as libc::size_t,
+            )
+        };
+        if k < 0 {
+            let e = std::io::Error::last_os_error().raw_os_error();
+            if e == Some(libc::EINTR) {
+                continue;
+            }
+            break;
+        }
+        if k == 0 {
+            empty += 1;
+            if empty >= 3 {
+                break;
+            }
+            continue;
+        }
+        empty = 0;
+        bl += k as usize;
+        osc4_parse(&buf[..bl], &mut pal, &mut have);
+    }
+    let mut tmp = [0u8; 1];
+    unsafe {
+        libc::read(fd, tmp.as_mut_ptr() as *mut libc::c_void, 1);
+    }
+    unsafe {
+        libc::tcsetattr(fd, libc::TCSANOW, &orig);
+        libc::close(fd);
+    }
+    if have.iter().all(|x| *x) {
+        Some(pal)
+    } else {
+        None
+    }
+}
+
+fn term_palette() -> Option<[(u8, u8, u8); 16]> {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    struct Cache {
+        state: i8,
+        at: Option<Instant>,
+        pal: [(u8, u8, u8); 16],
+    }
+    static CACHE: Mutex<Cache> = Mutex::new(Cache {
+        state: 0,
+        at: None,
+        pal: [(0, 0, 0); 16],
+    });
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    let stale = match c.at {
+        Some(t) => now.duration_since(t).as_millis() > 10_000,
+        None => true,
+    };
+    if c.state == 0 || stale {
+        match osc4_query_uncached() {
+            Some(p) => {
+                c.state = 1;
+                c.pal = p;
+            }
+            None => {
+                c.state = -1;
+            }
+        }
+        c.at = Some(now);
+    }
+    if c.state < 0 {
+        return None;
+    }
+    Some(c.pal)
+}
+
 fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
     use crate::config::color_to_rgb_any;
     let uid = unsafe { libc::getuid() };
@@ -227,10 +481,13 @@ fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
         if let (Some(l), Some(h)) = (lo, hi) {
             let (lr, lg, lb) = color_to_rgb_any(&l).unwrap();
             let (hr, hg, hb) = color_to_rgb_any(&h).unwrap();
-            return Some(distinct_pair(
-                (lr as u8, lg as u8, lb as u8),
-                (hr as u8, hg as u8, hb as u8),
-            ));
+            let mut lo_raw = (lr as u8, lg as u8, lb as u8);
+            let mut hi_raw = (hr as u8, hg as u8, hb as u8);
+            if let Some(pal) = term_palette() {
+                lo_raw = map_raw_through_term(lo_raw, &pal);
+                hi_raw = map_raw_through_term(hi_raw, &pal);
+            }
+            return Some(distinct_pair(lo_raw, hi_raw));
         }
     }
     None
@@ -1215,4 +1472,34 @@ fn main() {
     state::clear_state_file();
 
     std::process::exit(rc);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_vga_maps_through_terminal_palette() {
+        let mut pal = [(0u8, 0u8, 0u8); 16];
+        pal[4] = (10, 20, 30);
+        pal[6] = (40, 50, 60);
+        assert_eq!(map_raw_through_term((0, 0, 170), &pal), (10, 20, 30));
+        assert_eq!(map_raw_through_term((0, 170, 170), &pal), (40, 50, 60));
+    }
+
+    #[test]
+    fn truecolor_passthrough_keeps_raw() {
+        let pal = [(1u8, 2u8, 3u8); 16];
+        assert_eq!(map_raw_through_term((255, 136, 0), &pal), (255, 136, 0));
+    }
+
+    #[test]
+    fn osc4_response_parses() {
+        let mut pal = [(0u8, 0u8, 0u8); 16];
+        let mut have = [false; 16];
+        let buf = b"\x1b]4;4;rgb:0000/0000/aaaa\x1b\\".to_vec();
+        osc4_parse(&buf, &mut pal, &mut have);
+        assert!(have[4]);
+        assert_eq!(pal[4], (0, 0, 170));
+    }
 }
