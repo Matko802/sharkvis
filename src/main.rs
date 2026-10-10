@@ -368,7 +368,7 @@ fn osc4_query_uncached() -> Option<[(u8, u8, u8); 16]> {
     let mut buf = vec![0u8; 4096];
     let mut bl = 0usize;
     let mut empty = 0;
-    for _ in 0..6 {
+    for _ in 0..3 {
         if have.iter().all(|x| *x) || bl + 64 >= buf.len() {
             break;
         }
@@ -388,7 +388,7 @@ fn osc4_query_uncached() -> Option<[(u8, u8, u8); 16]> {
         }
         if k == 0 {
             empty += 1;
-            if empty >= 3 {
+            if empty >= 2 {
                 break;
             }
             continue;
@@ -396,10 +396,6 @@ fn osc4_query_uncached() -> Option<[(u8, u8, u8); 16]> {
         empty = 0;
         bl += k as usize;
         osc4_parse(&buf[..bl], &mut pal, &mut have);
-    }
-    let mut tmp = [0u8; 1];
-    unsafe {
-        libc::read(fd, tmp.as_mut_ptr() as *mut libc::c_void, 1);
     }
     unsafe {
         libc::tcsetattr(fd, libc::TCSANOW, &orig);
@@ -412,41 +408,36 @@ fn osc4_query_uncached() -> Option<[(u8, u8, u8); 16]> {
     }
 }
 
+struct TermPalCache {
+    state: i8,
+    pal: [(u8, u8, u8); 16],
+}
+
+static TERM_PAL_CACHE: std::sync::Mutex<TermPalCache> = std::sync::Mutex::new(TermPalCache {
+    state: 0,
+    pal: [(0, 0, 0); 16],
+});
+
 fn term_palette() -> Option<[(u8, u8, u8); 16]> {
-    use std::sync::Mutex;
-    use std::time::Instant;
-    struct Cache {
-        state: i8,
-        at: Option<Instant>,
-        pal: [(u8, u8, u8); 16],
-    }
-    static CACHE: Mutex<Cache> = Mutex::new(Cache {
-        state: 0,
-        at: None,
-        pal: [(0, 0, 0); 16],
-    });
-    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    let stale = match c.at {
-        Some(t) => now.duration_since(t).as_millis() > 10_000,
-        None => true,
-    };
-    if c.state == 0 || stale {
-        match osc4_query_uncached() {
-            Some(p) => {
-                c.state = 1;
-                c.pal = p;
-            }
-            None => {
-                c.state = -1;
-            }
-        }
-        c.at = Some(now);
-    }
-    if c.state < 0 {
+    let c = TERM_PAL_CACHE.try_lock().ok()?;
+    if c.state <= 0 {
         return None;
     }
     Some(c.pal)
+}
+
+fn term_palette_refresh() {
+    let queried = osc4_query_uncached();
+    let mut c = TERM_PAL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    match queried {
+        Some(p) => {
+            c.state = 1;
+            c.pal = p;
+        }
+        None => {
+            c.state = -1;
+        }
+    }
 }
 
 fn logo_gradient() -> Option<((u8, u8, u8), (u8, u8, u8))> {
@@ -797,6 +788,10 @@ fn main() {
 
     let mut audio = Audio::new(dsp[0].render_frame_size());
     audio.start(&cfg.source, cfg.sample_rate, cfg.channels);
+
+    if config_use_jefetch_colors(&cfg) {
+        term_palette_refresh();
+    }
 
     if !term_raw_enter(0) {
         eprintln!("sharkvis: not a terminal");
