@@ -122,6 +122,80 @@ fn seek_cell(r: u32, c: u32, out: &mut Out) {
     out.s(b"H");
 }
 
+fn pal_index_rgb(idx: u8) -> (u8, u8, u8) {
+    const BASE: [(u8, u8, u8); 16] = [
+        (0, 0, 0),
+        (205, 0, 0),
+        (0, 205, 0),
+        (205, 205, 0),
+        (0, 0, 238),
+        (205, 0, 205),
+        (0, 205, 205),
+        (229, 229, 229),
+        (127, 127, 127),
+        (255, 0, 0),
+        (0, 255, 0),
+        (255, 255, 0),
+        (92, 92, 255),
+        (255, 0, 255),
+        (0, 255, 255),
+        (255, 255, 255),
+    ];
+    let i = idx as usize;
+    if i < 16 {
+        return BASE[i];
+    }
+    if i < 232 {
+        let k = i - 16;
+        let lvl = |v: usize| -> u8 {
+            if v == 0 { 0 } else { (55 + 40 * v) as u8 }
+        };
+        return (lvl(k / 36), lvl((k % 36) / 6), lvl(k % 6));
+    }
+    let g = 8 + 10 * (i - 232);
+    (g as u8, g as u8, g as u8)
+}
+
+fn pal_spec_number(spec: &str) -> Option<u8> {
+    let mut it = spec.split(';');
+    match (it.next(), it.next(), it.next(), it.next()) {
+        (Some("38"), Some("5"), Some(n), None) => n.parse::<u8>().ok(),
+        _ => None,
+    }
+}
+
+fn cube_idx_nearest(rgb: (u8, u8, u8)) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let sh = |v: u8| -> u32 {
+        let mut best = 0u32;
+        let mut dist = u32::MAX;
+        for (i, l) in LEVELS.iter().enumerate() {
+            let d = u32::from(v.abs_diff(*l));
+            if d < dist {
+                dist = d;
+                best = i as u32;
+            }
+        }
+        best
+    };
+    (16 + 36 * sh(rgb.0) + 6 * sh(rgb.1) + sh(rgb.2)) as u8
+}
+
+fn index_ramp_spec(lo: &str, hi: &str, t: f64) -> Option<String> {
+    let (a, b) = (pal_spec_number(lo)?, pal_spec_number(hi)?);
+    if a == b {
+        return Some(lo.to_string());
+    }
+    if t <= 0.0 {
+        return Some(lo.to_string());
+    }
+    if t >= 1.0 {
+        return Some(hi.to_string());
+    }
+    let rgb = crate::state::lerp_rgb(pal_index_rgb(a), pal_index_rgb(b), t as f32);
+    Some(format!("38;5;{}", cube_idx_nearest(rgb)))
+}
+
 impl Renderer {
     fn render_glyph(&self, gi: i32) -> &[u8] {
         if gi <= 0 || self.glyphs.is_empty() {
@@ -184,6 +258,9 @@ impl Renderer {
             (frac * n).floor().min(n - 1.0) / (n - 1.0)
         };
         if let Some((lo, hi)) = self.grad_idx.as_ref() {
+            if let Some(spec) = index_ramp_spec(lo, hi, frac) {
+                return format!("\x1b[{spec}m").into_bytes();
+            }
             let spec = if frac < 0.5 { lo } else { hi };
             return format!("\x1b[{spec}m").into_bytes();
         }
@@ -685,6 +762,9 @@ impl Renderer {
     fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
         let t = xfrac.clamp(0.0, 1.0);
         if let Some((lo, hi)) = self.grad_idx.as_ref() {
+            if let Some(spec) = index_ramp_spec(lo, hi, t) {
+                return format!("\x1b[{spec}m").into_bytes();
+            }
             let spec = if t < 0.5 { lo } else { hi };
             return format!("\x1b[{spec}m").into_bytes();
         }
@@ -2073,6 +2153,50 @@ mod tests {
         r.grad_idx = Some(("36".to_string(), "36".to_string()));
         assert_eq!(r.bar_color(0, 8), b"\x1b[36m".to_vec());
         assert_eq!(r.bar_color(7, 8), b"\x1b[36m".to_vec());
+    }
+
+    #[test]
+    fn indexed_bar_color_interpolates_256_pairs() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.grad_idx = Some(("38;5;32".to_string(), "38;5;221".to_string()));
+        r.grad_amt = 2;
+        assert_eq!(r.bar_color(0, 8), b"\x1b[38;5;32m".to_vec());
+        assert_eq!(r.bar_color(7, 8), b"\x1b[38;5;221m".to_vec());
+        r.grad_amt = 256;
+        assert_eq!(r.bar_color(0, 8), b"\x1b[38;5;32m".to_vec());
+        assert_eq!(r.bar_color(7, 8), b"\x1b[38;5;221m".to_vec());
+        let parse = |v: &[u8]| -> u8 {
+            let s = std::str::from_utf8(v).unwrap();
+            s.rsplit(';').next().unwrap().trim_end_matches('m').parse().unwrap()
+        };
+        let mid = parse(&r.bar_color(3, 8));
+        assert_ne!(mid, 32);
+        assert_ne!(mid, 221);
+        assert_ne!(mid, parse(&r.bar_color(6, 8)));
+        r.grad_idx = Some(("38;5;105".to_string(), "38;5;105".to_string()));
+        assert_eq!(r.bar_color(0, 8), b"\x1b[38;5;105m".to_vec());
+    }
+
+    #[test]
+    fn indexed_letter_color_interpolates_256_pairs() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.grad_idx = Some(("38;5;32".to_string(), "38;5;221".to_string()));
+        let left = r.letter_color(0.0, 1.0);
+        let right = r.letter_color(1.0, 1.0);
+        let s = std::str::from_utf8(&left).unwrap();
+        let e = std::str::from_utf8(&right).unwrap();
+        assert_eq!(s, "\x1b[38;5;32m");
+        assert_eq!(e, "\x1b[38;5;221m");
+        let mid = r.letter_color(0.545, 1.0);
+        let m = std::str::from_utf8(&mid).unwrap();
+        assert!(m.starts_with("\x1b[38;5;"));
+        let mid_num: u8 = m.rsplit(';').next().unwrap().trim_end_matches('m').parse().unwrap();
+        assert_ne!(mid_num, 32);
+        assert_ne!(mid_num, 221);
+        assert_eq!(cube_idx_nearest(pal_index_rgb(221)), 221);
+        assert_eq!(cube_idx_nearest(pal_index_rgb(32)), 32);
+        assert_eq!(index_ramp_spec("34", "36", 0.2), None);
+        assert_eq!(index_ramp_spec("38;5;200", "38;5;200", 0.8), Some("38;5;200".into()));
     }
 
     #[test]

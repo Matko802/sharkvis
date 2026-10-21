@@ -74,6 +74,10 @@ panel save automatically when you close it.
 | `gradient_low` / `gradient_high` | Hex colors, low end to high end |
 | `gradient` | How many distinct colors the blend may use, `1`–`256` |
 
+Gradient ends may also be palette indexes like `38;5;196`. Pairs of indexes
+ramp across the 256-color palette between the two ends (per `gradient`),
+instead of stepping straight from one color to the other.
+
 ## Visualizer
 
 `mode` is one of `bars`, `wave`, `oscilloscope`, `lyrics`. Switch it
