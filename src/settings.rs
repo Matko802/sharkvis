@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::config::{color_index, color_name, Config, PALETTE};
+use crate::config::{color_index, color_name, colors_mode, Config, PALETTE};
 use crate::term::{KEY_CHAR, KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP};
 
 pub const CH_LAYOUT: u32 = 1 << 0;
@@ -77,20 +77,6 @@ fn clamp_l(v: i64, lo: i64, hi: i64) -> i64 {
 
 fn clamp_d(v: f64, lo: f64, hi: f64) -> f64 {
     v.max(lo).min(hi)
-}
-
-fn colors_style(cfg: &Config) -> u8 {
-    let tok: String = cfg
-        .colors
-        .trim_start()
-        .chars()
-        .take_while(|c| !c.is_whitespace() && *c != ',')
-        .collect();
-    if tok.eq_ignore_ascii_case("jefetch") {
-        1
-    } else {
-        0
-    }
 }
 
 struct ColorsStash {
@@ -224,7 +210,7 @@ impl SettingsUi {
                 } else {
                     cfg.gradient_high = new;
                 }
-                if colors_style(cfg) != 0 {
+                if colors_mode(&cfg.colors) != 0 {
                     cfg.colors.clear();
                 } else if !cfg.colors.is_empty() {
                     cfg.colors = format!("{},{}", cfg.gradient_low, cfg.gradient_high);
@@ -232,30 +218,31 @@ impl SettingsUi {
                 *changed |= CH_LAYOUT;
             }
             S_COLORS => {
-                let cur = colors_style(cfg);
-                let next = (cur as i64 + dir).rem_euclid(2) as u8;
-                if next == 0 {
-                    let stash = COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
-                    if !stash.custom.is_empty() {
-                        cfg.colors = stash.custom.clone();
-                    } else {
-                        cfg.colors.clear();
+                let cur = colors_mode(&cfg.colors);
+                let next = (cur as i64 + dir).rem_euclid(3) as u8;
+                if cur == 0 {
+                    let mut stash = COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
+                    if !cfg.colors.is_empty() {
+                        stash.custom = cfg.colors.clone();
                     }
-                    if !stash.lo.is_empty() && !stash.hi.is_empty() {
-                        cfg.gradient_low = stash.lo.clone();
-                        cfg.gradient_high = stash.hi.clone();
-                    }
-                } else {
-                    if cur == 0 {
-                        let mut stash =
-                            COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
-                        if !cfg.colors.is_empty() {
-                            stash.custom = cfg.colors.clone();
+                    stash.lo = cfg.gradient_low.clone();
+                    stash.hi = cfg.gradient_high.clone();
+                }
+                match next {
+                    0 => {
+                        let stash = COLORS_STASH.lock().unwrap_or_else(|e| e.into_inner());
+                        if !stash.custom.is_empty() {
+                            cfg.colors = stash.custom.clone();
+                        } else {
+                            cfg.colors.clear();
                         }
-                        stash.lo = cfg.gradient_low.clone();
-                        stash.hi = cfg.gradient_high.clone();
+                        if !stash.lo.is_empty() && !stash.hi.is_empty() {
+                            cfg.gradient_low = stash.lo.clone();
+                            cfg.gradient_high = stash.hi.clone();
+                        }
                     }
-                    cfg.colors = "jefetch".to_string();
+                    1 => cfg.colors = "jefetch".to_string(),
+                    _ => cfg.colors = "mpris".to_string(),
                 }
                 *changed |= CH_LAYOUT;
             }
@@ -352,7 +339,7 @@ impl SettingsUi {
 
     pub fn visible_rows(cfg: &Config) -> Vec<usize> {
         let mut rows = vec![S_MODE, S_GRAD, S_COLORS];
-        if colors_style(cfg) != 1 {
+        if colors_mode(&cfg.colors) == 0 {
             rows.push(S_GHI);
             rows.push(S_GLO);
         }
@@ -544,8 +531,9 @@ fn format_value(cfg: &Config, id: usize) -> String {
             }
         }
         S_GRAD => format!("{}", cfg.gradient_amt),
-        S_COLORS => match colors_style(cfg) {
+        S_COLORS => match colors_mode(&cfg.colors) {
             1 => "jefetch".to_string(),
+            2 => "mpris".to_string(),
             _ => "custom".to_string(),
         },
         S_GLO | S_GHI => {
@@ -694,14 +682,33 @@ mod tests {
     }
 
     #[test]
-    fn jefetch_colors_hide_custom_gradient_rows() {
+    fn override_colors_hide_custom_gradient_rows() {
         let mut cfg = Config::default();
         cfg.mode = "bars".to_string();
         assert!(SettingsUi::visible_rows(&cfg).contains(&S_GLO));
-        cfg.colors = "jefetch".to_string();
-        let rows = SettingsUi::visible_rows(&cfg);
-        assert!(!rows.contains(&S_GLO) && !rows.contains(&S_GHI));
-        assert!(rows.contains(&S_COLORS) && rows.contains(&S_GRAD));
+        for mode in ["jefetch", "mpris"] {
+            cfg.colors = mode.to_string();
+            let rows = SettingsUi::visible_rows(&cfg);
+            assert!(!rows.contains(&S_GLO) && !rows.contains(&S_GHI), "{}", mode);
+            assert!(rows.contains(&S_COLORS) && rows.contains(&S_GRAD));
+        }
+    }
+
+    #[test]
+    fn colors_cycle_custom_jefetch_mpris() {
+        let mut cfg = Config::default();
+        cfg.gradient_low = "112233".to_string();
+        cfg.gradient_high = "445566".to_string();
+        let mut changed = 0;
+        SettingsUi::adjust(&mut cfg, S_COLORS, 1, &mut changed);
+        assert_eq!(colors_mode(&cfg.colors), 1);
+        SettingsUi::adjust(&mut cfg, S_COLORS, 1, &mut changed);
+        assert_eq!(colors_mode(&cfg.colors), 2);
+        SettingsUi::adjust(&mut cfg, S_COLORS, 1, &mut changed);
+        assert_eq!(colors_mode(&cfg.colors), 0);
+        assert_eq!(cfg.gradient_low, "112233");
+        assert_eq!(cfg.gradient_high, "445566");
+        assert_ne!(changed & CH_LAYOUT, 0);
     }
 
     #[test]

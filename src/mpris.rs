@@ -9,6 +9,7 @@ pub struct Track {
     pub position: f64,
     pub duration: f64,
     pub url: String,
+    pub art_url: String,
 }
 
 impl Track {
@@ -130,11 +131,11 @@ fn fill_meta(t: &mut Track, player: &str) {
     t.player = player.to_string();
     let meta = cmd_out(
         "playerctl",
-        &["-p", player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}"],
+        &["-p", player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}|{{mpris:artUrl}}"],
         500,
     )
     .unwrap_or_default();
-    let mut parts = meta.splitn(4, '|');
+    let mut parts = meta.splitn(5, '|');
     t.artist = parts.next().unwrap_or("").trim().to_string();
     t.title = parts.next().unwrap_or("").trim().to_string();
     t.duration = parts
@@ -145,6 +146,7 @@ fn fill_meta(t: &mut Track, player: &str) {
         .map(|us| us / 1_000_000.0)
         .unwrap_or(0.0);
     t.url = parts.next().unwrap_or("").trim().to_string();
+    t.art_url = parts.next().unwrap_or("").trim().to_string();
     if t.title.is_empty() && t.url.is_empty() {
         return;
     }

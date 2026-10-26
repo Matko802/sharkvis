@@ -6,11 +6,13 @@ use std::time::{Duration, Instant};
 
 mod audio;
 mod config;
+mod cover;
 mod dsp;
 mod fft;
 mod lyrics;
 mod mpris;
 mod musixmatch;
+mod palette;
 mod pulse;
 mod raw;
 mod render;
@@ -19,7 +21,8 @@ mod state;
 mod term;
 
 use crate::audio::Audio;
-use crate::config::{config_default_path, config_load, config_save, Config};
+use crate::config::{config_default_path, config_load, config_save, colors_mode, Config};
+use crate::cover::CoverWorker;
 use crate::dsp::Dsp;
 use crate::lyrics::{FetchOpts, LyricWorker};
 use crate::mpris::{poll_named, poll_position, poll_track, Track};
@@ -175,16 +178,6 @@ fn run_editor(path: &str) {
     }
 }
 
-fn config_use_jefetch_colors(cfg: &Config) -> bool {
-    let tok: String = cfg
-        .colors
-        .trim_start()
-        .chars()
-        .take_while(|c| !c.is_whitespace() && *c != ',')
-        .collect();
-    tok.eq_ignore_ascii_case("jefetch")
-}
-
 fn distinct_pair(lo: (u8, u8, u8), hi: (u8, u8, u8)) -> ((u8, u8, u8), (u8, u8, u8)) {
     if lo != hi {
         return (lo, hi);
@@ -293,7 +286,11 @@ fn apply_spec_pair(rnd: &mut Renderer, lo_spec: &str, hi_spec: &str, synth: bool
     }
 }
 
-fn apply_colors(rnd: &mut Renderer, cfg: &Config) {
+fn apply_colors(
+    rnd: &mut Renderer,
+    cfg: &Config,
+    cover: Option<((u8, u8, u8), (u8, u8, u8))>,
+) {
     let before = (
         rnd.grad_lo,
         rnd.grad_hi,
@@ -304,7 +301,11 @@ fn apply_colors(rnd: &mut Renderer, cfg: &Config) {
     rnd.color_256 = cfg.color_256;
     rnd.grad_amt = cfg.gradient_amt;
     let mut done = false;
-    if config_use_jefetch_colors(cfg) {
+    if crate::config::colors_mode(&cfg.colors) == 2 {
+        if let Some((lo, hi)) = cover {
+            done = apply_rgb_pair(rnd, lo, hi);
+        }
+    } else if crate::config::colors_mode(&cfg.colors) == 1 {
         if let Some((lo, hi)) = logo_specs() {
             done = apply_spec_pair(rnd, &lo, &hi, true);
         }
@@ -324,6 +325,18 @@ fn apply_colors(rnd: &mut Renderer, cfg: &Config) {
     }
 }
 
+fn apply_rgb_pair(
+    rnd: &mut Renderer,
+    lo: (u8, u8, u8),
+    hi: (u8, u8, u8),
+) -> bool {
+    let (lo, hi) = distinct_pair(lo, hi);
+    rnd.grad_lo = ((lo.0 as u32) << 16) | ((lo.1 as u32) << 8) | lo.2 as u32;
+    rnd.grad_hi = ((hi.0 as u32) << 16) | ((hi.1 as u32) << 8) | hi.2 as u32;
+    rnd.grad_idx = None;
+    true
+}
+
 fn apply_settings(
     dsp: &mut [Dsp; 2],
     rnd: &mut Renderer,
@@ -337,6 +350,7 @@ fn apply_settings(
     chmask: u32,
     audio_reinit: bool,
     x_off: usize,
+    cover: Option<((u8, u8, u8), (u8, u8, u8))>,
 ) {
     let new_bars = bar_count_for(cols, cfg);
     let pcl = per_ch_left(new_bars, cfg.channels);
@@ -376,7 +390,7 @@ fn apply_settings(
     rnd.grad_amt = cfg.gradient_amt;
     rnd.wave_sm = cfg.wave_smoothing;
     rnd.wave_fps = cfg.framerate;
-    apply_colors(rnd, cfg);
+    apply_colors(rnd, cfg, cover);
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
     rnd.set_mode(Renderer::mode_parse(m));
     rnd.set_glyphs(Some(&cfg.chars));
@@ -634,7 +648,7 @@ fn main() {
         cfg.bar_spacing,
         bars,
     );
-    apply_colors(&mut rnd, &cfg);
+    apply_colors(&mut rnd, &cfg, None);
     rnd.wave_sm = cfg.wave_smoothing;
     rnd.wave_fps = cfg.framerate;
     let m = if cfg.mode.is_empty() { "bars" } else { cfg.mode.as_str() };
@@ -670,6 +684,9 @@ fn main() {
     let mut manual_player: Option<String> = None;
     let mut last_provider = cfg.provider.clone();
     let mut last_pos_poll = Instant::now();
+    let mut cover = CoverWorker::new();
+    let mut cover_colors: Option<((u8, u8, u8), (u8, u8, u8))> = None;
+    let mut cover_poll_at = Instant::now();
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
@@ -738,7 +755,7 @@ fn main() {
                 }
                 apply_settings(
                     &mut dsp, &mut rnd, &mut audio, &mut cfg, &mut bars, &mut heights, &mut last_h,
-                    rows, cols, chmask, (chmask & CH_AUDIO) != 0, 0,
+                    rows, cols, chmask, (chmask & CH_AUDIO) != 0, 0, cover_colors,
                 );
                 chmask = 0;
                 force_draw = true;
@@ -780,7 +797,7 @@ fn main() {
                     apply_settings(
                         &mut dsp, &mut rnd, &mut audio, &mut cfg, &mut bars, &mut heights,
                         &mut last_h, rows, cols, chmask, (chmask & CH_AUDIO) != 0,
-                        panel_width_for(cols),
+                        panel_width_for(cols), cover_colors,
                     );
 
                     cfg_dirty = true;
@@ -1078,16 +1095,16 @@ fn main() {
                         if last_color_stamp.is_none() {
                             last_color_stamp = Some(stamp);
                         } else if crate::config::reload_colors(&mut cfg, &save_path) {
-                            apply_colors(&mut rnd, &cfg);
+                            apply_colors(&mut rnd, &cfg, cover_colors);
                             force_draw = true;
                             last_color_stamp = Some(stamp);
                         }
                     }
                 }
             }
-            if config_use_jefetch_colors(&cfg) {
+            if colors_mode(&cfg.colors) == 1 {
                 let before = (rnd.grad_lo, rnd.grad_hi, rnd.grad_idx.clone());
-                apply_colors(&mut rnd, &cfg);
+                apply_colors(&mut rnd, &cfg, cover_colors);
                 let after = (rnd.grad_lo, rnd.grad_hi, rnd.grad_idx.clone());
                 if after != before {
                     force_draw = true;
@@ -1095,7 +1112,8 @@ fn main() {
             }
         }
         let need_lyrics = rnd.mode == RenderMode::Lyrics;
-        if need_lyrics {
+        let need_cover = colors_mode(&cfg.colors) == 2;
+        if need_lyrics || need_cover {
             if last_track_poll.elapsed() >= Duration::from_millis(2000) {
                 last_track_poll = Instant::now();
                 let allow: Vec<String> = cfg
@@ -1120,31 +1138,61 @@ fn main() {
                     track = fresh;
                 } else {
                     track.present = false;
+                    track.art_url.clear();
                     if !crate::mpris::any_active_player() {
                         lyric.reset();
                     }
                 }
             }
-            if last_pos_poll.elapsed() >= Duration::from_millis(200) {
-                last_pos_poll = Instant::now();
-                if track.present && !track.player.is_empty() {
-                    if let Some(pos) = poll_position(&track.player) {
-                        track.position = pos;
-                        lyric.update_pos(pos);
+            if need_lyrics {
+                if last_pos_poll.elapsed() >= Duration::from_millis(200) {
+                    last_pos_poll = Instant::now();
+                    if track.present && !track.player.is_empty() {
+                        if let Some(pos) = poll_position(&track.player) {
+                            track.position = pos;
+                            lyric.update_pos(pos);
+                        }
                     }
                 }
+                lyric.update(
+                    &track,
+                    &FetchOpts {
+                        local_folder: cfg.lyrics_folder.clone(),
+                        provider: cfg.provider.clone(),
+                    },
+                );
+            } else {
+                last_pos_poll = Instant::now();
             }
-            lyric.update(
-                &track,
-                &FetchOpts {
-                    local_folder: cfg.lyrics_folder.clone(),
-                    provider: cfg.provider.clone(),
-                },
-            );
         } else {
 
             last_track_poll = Instant::now();
             last_pos_poll = Instant::now();
+        }
+        if need_cover {
+            if cover_poll_at.elapsed() >= Duration::from_millis(500) {
+                cover_poll_at = Instant::now();
+                let key = if track.present {
+                    track.key()
+                } else {
+                    String::new()
+                };
+                let art = if track.present {
+                    track.art_url.as_str()
+                } else {
+                    ""
+                };
+                cover.set_target(&key, &art);
+                if cover.poll() {
+                    cover_colors = cover.pair();
+                    apply_colors(&mut rnd, &cfg, cover_colors);
+                    force_draw = true;
+                }
+            }
+        } else if cover_colors.take().is_some() {
+            cover.clear();
+            apply_colors(&mut rnd, &cfg, None);
+            force_draw = true;
         }
         lyric.set_offset_ms(cfg.lyric_offset_ms);
         rnd.text_left = cfg.text_align == "left";

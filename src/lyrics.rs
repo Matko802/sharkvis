@@ -1379,6 +1379,7 @@ mod worker_tests {
             title: "b".to_string(),
             position: pos,
             duration: 30.0,
+            art_url: String::new(),
             url: String::new(),
         }
     }
@@ -1701,6 +1702,7 @@ mod port_tests {
             title: "b".to_string(),
             position: 15.0,
             duration: 30.0,
+            art_url: String::new(),
             url: String::new(),
         };
         assert_eq!(w.display_lines(&track), vec![("one two three four".to_string(), true)]);
@@ -1725,6 +1727,7 @@ mod port_tests {
             title: "song".to_string(),
             position: 0.0,
             duration: 0.0,
+            art_url: String::new(),
             url: String::new(),
         };
         w.update_meta(&track, &FetchOpts::default());

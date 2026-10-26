@@ -135,6 +135,21 @@ pub fn color_index(hex: &str) -> i32 {
         .unwrap_or(-1)
 }
 
+pub fn colors_mode(colors: &str) -> u8 {
+    let tok: String = colors
+        .trim_start()
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != ',')
+        .collect();
+    if tok.eq_ignore_ascii_case("jefetch") {
+        1
+    } else if tok.eq_ignore_ascii_case("mpris") {
+        2
+    } else {
+        0
+    }
+}
+
 pub fn config_default_path() -> String {
     if let Ok(env) = std::env::var("SHARKVIS_CONFIG") {
         if !env.is_empty() {
@@ -831,6 +846,17 @@ mod tests {
     }
 
     #[test]
+    fn colors_mode_tokens() {
+        assert_eq!(colors_mode(""), 0);
+        assert_eq!(colors_mode("custom"), 0);
+        assert_eq!(colors_mode("jefetch"), 1);
+        assert_eq!(colors_mode("JEFETCH"), 1);
+        assert_eq!(colors_mode("mpris"), 2);
+        assert_eq!(colors_mode("MPRIS"), 2);
+        assert_eq!(colors_mode("mpris, trailing"), 2);
+    }
+
+    #[test]
     fn colors_style_rules() {
         let mut c = Config::default();
         c.colors = "".to_string();
@@ -852,6 +878,13 @@ mod tests {
             (c.gradient_low.as_str(), c.gradient_high.as_str()),
             ("red", "#00ff00"),
             "invalid pair keeps previous"
+        );
+        c.colors = "mpris".to_string();
+        apply_colors_style(&mut c);
+        assert_eq!(
+            (c.gradient_low.as_str(), c.gradient_high.as_str()),
+            ("red", "#00ff00"),
+            "override tokens keep custom gradient"
         );
     }
 }

@@ -51,9 +51,10 @@
         sharkvis = sharkvis { pkgs = final.pkgsStatic; };
       };
 
-      devShells = forAllSystems (pkgs:
-        pkgs.mkShell {
+      devShells = forAllSystems (pkgs: {
+        default = pkgs.pkgsMusl.mkShell {
           buildInputs = [ pkgs.pkgsMusl.cargo pkgs.pkgsMusl.rustc ];
-        });
+        };
+      });
     };
 }

@@ -73,10 +73,28 @@ panel save automatically when you close it.
 | `color_mode` | `"24bit"` or `"256"` |
 | `gradient_low` / `gradient_high` | Hex colors, low end to high end |
 | `gradient` | How many distinct colors the blend may use, `1`–`256` |
+| `colors` | Source of the gradient ends: `""`/`"custom"`, `"jefetch"`, or `"mpris"` |
 
-Gradient ends may also be palette indexes like `38;5;196`. Pairs of indexes
-ramp across the 256-color palette between the two ends (per `gradient`),
-instead of stepping straight from one color to the other.
+`colors` picks where the gradient ends come from at runtime:
+
+- custom (default): always `gradient_low` / `gradient_high`.
+- `jefetch`: follow the pair
+  [jefetch](https://github.com/Matko802/jefetch) publishes to
+  `$XDG_RUNTIME_DIR/sharkvis/logo_colors` (`textcolor=sharkvis`), falling
+  back to the configured gradient while it is absent.
+- `mpris`: two vivid colors extracted from the playing track's album
+  cover (the active MPRIS player's `mpris:artUrl`, fetched to
+  `~/.cache/sharkvis/covers/`). Without a cover — nothing playing, no
+  art URL, or a cover too plain to yield two distinct colors — it falls
+  back to the configured gradient. Switching to a track without art
+  drops back to the fallback colors, not the previous cover's.
+
+Gradient ends may also be palette indexes like `38;5;196`. Pairs of
+indexes ramp across the 256-color palette between the two ends (per
+`gradient`), instead of stepping straight from one color to the other.
+This applies no matter which `colors` source supplied the ends; in
+`256` mode intermediate bars step through palette entries, in `24bit`
+they blend in truecolor.
 
 ## Visualizer
 

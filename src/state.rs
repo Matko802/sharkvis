@@ -84,8 +84,21 @@ impl StateWriter {
                 )
             }
             LiveEnds::Idx(lo, hi) => {
-                let cur = if e < 0.5 { lo } else { hi };
-                (cur.clone(), lo.clone(), hi.clone())
+                let t = if amt <= 1 {
+                    0.0
+                } else {
+                    let n = amt as f64;
+                    (e * n).floor().min(n - 1.0) / (n - 1.0)
+                };
+                let (r, g, b) = crate::palette::ramp_rgb(lo, hi, t)
+                    .or_else(|| crate::palette::spec_rgb(lo))
+                    .or_else(|| crate::palette::spec_rgb(hi))
+                    .unwrap_or((255, 255, 255));
+                (
+                    format!("#{:02x}{:02x}{:02x}", r, g, b),
+                    lo.clone(),
+                    hi.clone(),
+                )
             }
         };
         let l = left.clamp(0.0, 1.0);
@@ -333,9 +346,7 @@ fn estimate_period(times: &[f64]) -> Option<f64> {
 }
 
 pub fn lerp_rgb(lo: (u8, u8, u8), hi: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
-    let t = t.clamp(0.0, 1.0);
-    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t + 0.5) as u8;
-    (mix(lo.0, hi.0), mix(lo.1, hi.1), mix(lo.2, hi.2))
+    crate::palette::lerp_rgb(lo, hi, t)
 }
 
 fn custom_state_path() -> Option<String> {
