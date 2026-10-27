@@ -25,7 +25,7 @@ use crate::config::{config_default_path, config_load, config_save, colors_mode, 
 use crate::cover::CoverWorker;
 use crate::dsp::Dsp;
 use crate::lyrics::{FetchOpts, LyricWorker};
-use crate::mpris::{poll_named, poll_position, poll_track, Track};
+use crate::mpris::{Track, TrackWorker};
 use crate::render::{RenderMode, Renderer};
 use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
@@ -678,15 +678,12 @@ fn main() {
     let mut last_color_stamp: Option<(std::time::SystemTime, u64)> = None;
     let mut lyric = LyricWorker::new();
     let mut track = Track::default();
-    let mut last_track_poll = Instant::now();
     let mut last_lyric_shown = String::new();
     let mut search_buf: Option<String> = None;
-    let mut manual_player: Option<String> = None;
     let mut last_provider = cfg.provider.clone();
-    let mut last_pos_poll = Instant::now();
     let mut cover = CoverWorker::new();
     let mut cover_colors: Option<((u8, u8, u8), (u8, u8, u8))> = None;
-    let mut cover_poll_at = Instant::now();
+    let mut track_worker = TrackWorker::new();
 
     let mut next = Instant::now();
     let mut live = state::StateWriter::new();
@@ -839,14 +836,16 @@ fn main() {
                 } else if is_k(key, &cp[..clen], b'l') || is_k(key, &cp[..clen], b'L') {
                     let players = crate::mpris::player_list();
                     if !players.is_empty() {
-                        manual_player = match manual_player
-                            .as_ref()
-                            .and_then(|m| players.iter().position(|p| p == m))
-                        {
+                        let next = if track.player.is_empty() {
+                            None
+                        } else {
+                            players.iter().position(|p| *p == track.player)
+                        };
+                        track_worker.set_manual(match next {
                             Some(i) if i + 1 < players.len() => Some(players[i + 1].clone()),
                             Some(_) => None,
                             None => Some(players[0].clone()),
-                        };
+                        });
                         force_draw = true;
                     }
                 } else if is_k(key, &cp[..clen], b'r') || is_k(key, &cp[..clen], b'R') {
@@ -1113,47 +1112,22 @@ fn main() {
         }
         let need_lyrics = rnd.mode == RenderMode::Lyrics;
         let need_cover = colors_mode(&cfg.colors) == 2;
+        let allow: Vec<String> = cfg
+            .mpris_players
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        track_worker.set_allow(allow);
+        track_worker.set_want_pos(need_lyrics);
         if need_lyrics || need_cover {
-            if last_track_poll.elapsed() >= Duration::from_millis(2000) {
-                last_track_poll = Instant::now();
-                let allow: Vec<String> = cfg
-                    .mpris_players
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                let fresh = match manual_player.clone() {
-                    Some(m) => {
-                        let t = poll_named(&m);
-                        if t.present {
-                            t
-                        } else {
-                            manual_player = None;
-                            poll_track(&allow)
-                        }
-                    }
-                    None => poll_track(&allow),
-                };
-                if fresh.present {
-                    track = fresh;
-                } else {
-                    track.present = false;
-                    track.art_url.clear();
-                    if !crate::mpris::any_active_player() {
-                        lyric.reset();
-                    }
+            while let Some(t) = track_worker.poll() {
+                if !t.present && track.present {
+                    lyric.reset();
                 }
+                track = t;
             }
             if need_lyrics {
-                if last_pos_poll.elapsed() >= Duration::from_millis(200) {
-                    last_pos_poll = Instant::now();
-                    if track.present && !track.player.is_empty() {
-                        if let Some(pos) = poll_position(&track.player) {
-                            track.position = pos;
-                            lyric.update_pos(pos);
-                        }
-                    }
-                }
                 lyric.update(
                     &track,
                     &FetchOpts {
@@ -1161,33 +1135,24 @@ fn main() {
                         provider: cfg.provider.clone(),
                     },
                 );
-            } else {
-                last_pos_poll = Instant::now();
             }
-        } else {
-
-            last_track_poll = Instant::now();
-            last_pos_poll = Instant::now();
         }
         if need_cover {
-            if cover_poll_at.elapsed() >= Duration::from_millis(500) {
-                cover_poll_at = Instant::now();
-                let key = if track.present {
-                    track.key()
-                } else {
-                    String::new()
-                };
-                let art = if track.present {
-                    track.art_url.as_str()
-                } else {
-                    ""
-                };
-                cover.set_target(&key, &art);
-                if cover.poll() {
-                    cover_colors = cover.pair();
-                    apply_colors(&mut rnd, &cfg, cover_colors);
-                    force_draw = true;
-                }
+            let key = if track.present {
+                track.key()
+            } else {
+                String::new()
+            };
+            let art = if track.present {
+                track.art_url.as_str()
+            } else {
+                ""
+            };
+            cover.set_target(&key, &art);
+            if cover.poll() {
+                cover_colors = cover.pair();
+                apply_colors(&mut rnd, &cfg, cover_colors);
+                force_draw = true;
             }
         } else if cover_colors.take().is_some() {
             cover.clear();

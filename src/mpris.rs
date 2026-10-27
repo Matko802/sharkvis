@@ -1,3 +1,5 @@
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Default)]
@@ -178,6 +180,122 @@ pub fn poll_position(player: &str) -> Option<f64> {
     }
     cmd_out("playerctl", &["-p", player, "position"], 300)
         .and_then(|s| s.parse::<f64>().ok())
+}
+
+#[derive(Clone, Default)]
+struct TrackCmd {
+    manual: Option<String>,
+    allow: Vec<String>,
+    allow_init: bool,
+    want_pos: bool,
+    quit: bool,
+}
+
+pub struct TrackWorker {
+    cmd: Arc<Mutex<TrackCmd>>,
+    rx: Receiver<Track>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TrackWorker {
+    pub fn new() -> TrackWorker {
+        let cmd = Arc::new(Mutex::new(TrackCmd::default()));
+        let (res_tx, rx): (Sender<Track>, Receiver<Track>) = mpsc::channel();
+        let cmd_thread = Arc::clone(&cmd);
+        let handle = std::thread::spawn(move || {
+            let mut track = Track::default();
+            let mut last_poll = Instant::now();
+            let mut last_pos = Instant::now();
+            loop {
+                let cmd = {
+                    let Ok(g) = cmd_thread.lock() else {
+                        return;
+                    };
+                    if g.quit {
+                        return;
+                    }
+                    g.clone()
+                };
+                if cmd.allow_init && last_poll.elapsed() >= Duration::from_millis(1000) {
+                    last_poll = Instant::now();
+                    let fresh = match cmd.manual.clone() {
+                        Some(m) => {
+                            let t = poll_named(&m);
+                            if t.present {
+                                t
+                            } else {
+                                if let Ok(mut g) = cmd_thread.lock() {
+                                    g.manual = None;
+                                }
+                                poll_track(&cmd.allow)
+                            }
+                        }
+                        None => poll_track(&cmd.allow),
+                    };
+                    if fresh.present {
+                        track = fresh;
+                        let _ = res_tx.send(track.clone());
+                    } else if track.present {
+                        track.present = false;
+                        track.player.clear();
+                        track.art_url.clear();
+                        let _ = res_tx.send(track.clone());
+                    }
+                }
+                if cmd.want_pos
+                    && track.present
+                    && !track.player.is_empty()
+                    && last_pos.elapsed() >= Duration::from_millis(200)
+                {
+                    last_pos = Instant::now();
+                    if let Some(pos) = poll_position(&track.player) {
+                        track.position = pos;
+                        let _ = res_tx.send(track.clone());
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        TrackWorker {
+            cmd,
+            rx,
+            handle: Some(handle),
+        }
+    }
+
+    pub fn set_manual(&self, m: Option<String>) {
+        if let Ok(mut g) = self.cmd.lock() {
+            g.manual = m;
+        }
+    }
+
+    pub fn set_allow(&self, allow: Vec<String>) {
+        if let Ok(mut g) = self.cmd.lock() {
+            g.allow = allow;
+            g.allow_init = true;
+        }
+    }
+
+    pub fn set_want_pos(&self, b: bool) {
+        if let Ok(mut g) = self.cmd.lock() {
+            g.want_pos = b;
+        }
+    }
+
+    pub fn poll(&mut self) -> Option<Track> {
+        self.rx.try_recv().ok()
+    }
+}
+
+impl Drop for TrackWorker {
+    fn drop(&mut self) {
+        if let Ok(mut g) = self.cmd.lock() {
+            g.quit = true;
+        }
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
 }
 
 #[cfg(test)]
