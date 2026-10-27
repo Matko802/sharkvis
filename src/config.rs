@@ -323,10 +323,9 @@ fn apply_color_value(cfg: &mut Config, color: &serde_json::Value) {
             cfg.gradient_high = s.to_string();
         }
     }
-    if let Some(s) = color.get("colors").and_then(|v| v.as_str()) {
-        if !s.is_empty() {
-            cfg.colors = s.to_string();
-        }
+    match color.get("colors").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => cfg.colors = s.to_string(),
+        _ => cfg.colors.clear(),
     }
     if let Some(v) = color.get("gradient") {
         cfg.gradient_amt = jint(v, cfg.gradient_amt as i64).clamp(1, 256) as u32;
@@ -854,6 +853,44 @@ mod tests {
         assert_eq!(colors_mode("mpris"), 2);
         assert_eq!(colors_mode("MPRIS"), 2);
         assert_eq!(colors_mode("mpris, trailing"), 2);
+    }
+
+    #[test]
+    fn reload_colors_absent_or_empty_clears_mode() {
+        let dir = std::env::temp_dir().join(format!("sharkvis-reload-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.jsonc");
+        let mut c = Config::default();
+        c.colors = "jefetch".to_string();
+
+        std::fs::write(
+            &path,
+            r#"{"color": {"colors": "jefetch", "gradient_low": "red", "gradient_high": "lime"}}"#,
+        )
+        .unwrap();
+        assert!(reload_colors(&mut c, path.to_str().unwrap()));
+        assert_eq!(colors_mode(&c.colors), 1);
+
+        std::fs::write(
+            &path,
+            r#"{"color": {"colors": "", "gradient_low": "red", "gradient_high": "lime"}}"#,
+        )
+        .unwrap();
+        assert!(reload_colors(&mut c, path.to_str().unwrap()));
+        assert_eq!(colors_mode(&c.colors), 0, "empty token must leave override mode");
+
+        std::fs::write(
+            &path,
+            r#"{"color": {"gradient_low": "red", "gradient_high": "lime"}}"#,
+        )
+        .unwrap();
+        assert!(reload_colors(&mut c, path.to_str().unwrap()));
+        assert_eq!(colors_mode(&c.colors), 0, "removed key must leave override mode");
+
+        std::fs::write(&path, r#"{"color": {"colors": "mpris"}}"#).unwrap();
+        assert!(reload_colors(&mut c, path.to_str().unwrap()));
+        assert_eq!(colors_mode(&c.colors), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
