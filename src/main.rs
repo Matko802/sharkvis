@@ -1327,13 +1327,24 @@ mod tests {
     }
 
     #[test]
-    fn logo_specs_override_isolated() {
+    fn jefetch_mode_follows_published_pair() {
         let path = std::env::temp_dir().join(format!("sharkvis-logo-specs-{}", std::process::id()));
-        std::fs::write(&path, "low=34 high=36\n").unwrap();
+        std::fs::write(&path, "low=#ff00ff high=#88ff00\n").unwrap();
         std::env::set_var("SHARKVIS_LOGO_COLORS", &path);
         assert_eq!(
             logo_specs(),
-            Some(("34".to_string(), "36".to_string()))
+            Some(("#ff00ff".to_string(), "#88ff00".to_string()))
+        );
+        let mut cfg = Config::default();
+        cfg.colors = "jefetch".to_string();
+        cfg.gradient_low = "000000".to_string();
+        cfg.gradient_high = "ffffff".to_string();
+        let mut rnd = Renderer::new(24, 80, 2, 1, 8);
+        apply_colors(&mut rnd, &cfg, None);
+        assert_eq!(
+            (rnd.grad_lo, rnd.grad_hi),
+            (0xff00ff, 0x88ff00),
+            "the published pair wins over the configured ends"
         );
         std::env::set_var("SHARKVIS_LOGO_COLORS", "/nonexistent-sharkvis-logo-colors");
         assert_eq!(logo_specs(), None);

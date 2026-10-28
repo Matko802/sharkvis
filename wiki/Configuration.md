@@ -78,10 +78,12 @@ panel save automatically when you close it.
 `colors` picks where the gradient ends come from at runtime:
 
 - custom (default): always `gradient_low` / `gradient_high`.
-- `jefetch`: follow the pair
+- `jefetch`: follow the gradient ends
   [jefetch](https://github.com/Matko802/jefetch) publishes to
-  `$XDG_RUNTIME_DIR/sharkvis/logo_colors` (`textcolor=sharkvis`), falling
-  back to the configured gradient while it is absent.
+  `$XDG_RUNTIME_DIR/sharkvis/logo_colors` — the colors it is actually
+  rendering, including its `color=sharkvis` / `textcolor=sharkvis` ramp
+  over this file's `gradient_low` / `gradient_high` — falling back to
+  the configured gradient while the file is absent.
 - `mpris`: two vivid colors extracted from the playing track's album
   cover (the active MPRIS player's `mpris:artUrl`, fetched to
   `~/.cache/sharkvis/covers/`). Without a cover — nothing playing, no
