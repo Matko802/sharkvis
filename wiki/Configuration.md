@@ -72,18 +72,20 @@ panel save automatically when you close it.
 |-----|-------|
 | `color_mode` | `"24bit"` or `"256"` |
 | `gradient_low` / `gradient_high` | Hex colors, low end to high end |
-| `gradient` | How many distinct colors the blend may use, `1`–`256` |
+| `gradient` | How many distinct colors the blend may use, `1`–`256` (custom and `mpris`; hidden and fixed at `2` in `jefetch` mode) |
 | `colors` | Source of the gradient ends: `""`/`"custom"`, `"jefetch"`, or `"mpris"` |
 
 `colors` picks where the gradient ends come from at runtime:
 
 - custom (default): always `gradient_low` / `gradient_high`.
-- `jefetch`: follow the gradient ends
+- `jefetch`: follow the pair
   [jefetch](https://github.com/Matko802/jefetch) publishes to
   `$XDG_RUNTIME_DIR/sharkvis/logo_colors` — the colors it is actually
   rendering, including its `color=sharkvis` / `textcolor=sharkvis` ramp
   over this file's `gradient_low` / `gradient_high` — falling back to
-  the configured gradient while the file is absent.
+  the configured gradient while the file is absent. This mode always
+  renders just those two colors with no blend, and the settings panel
+  hides the `gradient` row while it is selected.
 - `mpris`: two vivid colors extracted from the playing track's album
   cover (the active MPRIS player's `mpris:artUrl`, fetched to
   `~/.cache/sharkvis/covers/`). Without a cover — nothing playing, no
@@ -94,9 +96,9 @@ panel save automatically when you close it.
 Gradient ends may also be palette indexes like `38;5;196`. Pairs of
 indexes ramp across the 256-color palette between the two ends (per
 `gradient`), instead of stepping straight from one color to the other.
-This applies no matter which `colors` source supplied the ends; in
-`256` mode intermediate bars step through palette entries, in `24bit`
-they blend in truecolor.
+This applies to custom and `mpris` sources; in `256` mode intermediate
+bars step through palette entries, in `24bit` they blend in truecolor.
+`jefetch` mode always uses exactly two colors.
 
 ## Visualizer
 

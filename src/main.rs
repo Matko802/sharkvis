@@ -299,7 +299,11 @@ fn apply_colors(
         rnd.grad_idx.clone(),
     );
     rnd.color_256 = cfg.color_256;
-    rnd.grad_amt = cfg.gradient_amt;
+    rnd.grad_amt = if crate::config::colors_mode(&cfg.colors) == 1 {
+        2
+    } else {
+        cfg.gradient_amt
+    };
     let mut done = false;
     if crate::config::colors_mode(&cfg.colors) == 2 {
         if let Some((lo, hi)) = cover {
@@ -1081,7 +1085,7 @@ fn main() {
                 right,
                 &ends,
                 dsp[0].sens,
-                cfg.gradient_amt,
+                rnd.grad_amt,
             );
         }
 
@@ -1339,6 +1343,7 @@ mod tests {
         cfg.colors = "jefetch".to_string();
         cfg.gradient_low = "000000".to_string();
         cfg.gradient_high = "ffffff".to_string();
+        cfg.gradient_amt = 256;
         let mut rnd = Renderer::new(24, 80, 2, 1, 8);
         apply_colors(&mut rnd, &cfg, None);
         assert_eq!(
@@ -1346,6 +1351,7 @@ mod tests {
             (0xff00ff, 0x88ff00),
             "the published pair wins over the configured ends"
         );
+        assert_eq!(rnd.grad_amt, 2, "jefetch mode is always two colors");
         std::env::set_var("SHARKVIS_LOGO_COLORS", "/nonexistent-sharkvis-logo-colors");
         assert_eq!(logo_specs(), None);
         std::env::remove_var("SHARKVIS_LOGO_COLORS");

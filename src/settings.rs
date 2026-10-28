@@ -187,6 +187,9 @@ impl SettingsUi {
                 }
             }
             S_GRAD => {
+                if colors_mode(&cfg.colors) == 1 {
+                    return;
+                }
                 let v = clamp_l(cfg.gradient_amt as i64 + dir, 1, 256);
                 if v as u32 != cfg.gradient_amt {
                     cfg.gradient_amt = v as u32;
@@ -338,7 +341,10 @@ impl SettingsUi {
     }
 
     pub fn visible_rows(cfg: &Config) -> Vec<usize> {
-        let mut rows = vec![S_MODE, S_GRAD, S_COLORS];
+        let mut rows = vec![S_MODE, S_COLORS];
+        if colors_mode(&cfg.colors) != 1 {
+            rows.push(S_GRAD);
+        }
         if colors_mode(&cfg.colors) == 0 {
             rows.push(S_GHI);
             rows.push(S_GLO);
@@ -690,7 +696,13 @@ mod tests {
             cfg.colors = mode.to_string();
             let rows = SettingsUi::visible_rows(&cfg);
             assert!(!rows.contains(&S_GLO) && !rows.contains(&S_GHI), "{}", mode);
-            assert!(rows.contains(&S_COLORS) && rows.contains(&S_GRAD));
+            assert!(rows.contains(&S_COLORS), "{}", mode);
+            assert_eq!(
+                rows.contains(&S_GRAD),
+                mode == "mpris",
+                "jefetch keeps two fixed colors; {} gradient row",
+                mode
+            );
         }
     }
 
