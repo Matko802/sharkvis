@@ -2,9 +2,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
 
 pub type Rgb = (u8, u8, u8);
 type Pair = (Rgb, Rgb);
+
+const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 pub struct CoverWorker {
     tx: Sender<(String, String)>,
@@ -13,6 +16,7 @@ pub struct CoverWorker {
     pending: Option<String>,
     key: Option<String>,
     art: Option<String>,
+    retry_at: Option<Instant>,
 }
 
 impl CoverWorker {
@@ -34,6 +38,7 @@ impl CoverWorker {
             pending: None,
             key: None,
             art: None,
+            retry_at: None,
         }
     }
 
@@ -44,11 +49,17 @@ impl CoverWorker {
             return;
         }
         if self.key.as_deref() == Some(key) && self.art.as_deref() == Some(art) {
-            return;
+            if self.pending.is_some() || self.last.is_some() {
+                return;
+            }
+            if self.retry_at.is_some_and(|t| Instant::now() < t) {
+                return;
+            }
         }
         self.key = Some(key.to_string());
         self.art = Some(art.to_string());
         self.pending = Some(key.to_string());
+        self.retry_at = None;
         let _ = self.tx.send((key.to_string(), art.to_string()));
     }
 
@@ -65,6 +76,9 @@ impl CoverWorker {
             if pair.is_some() {
                 self.last = pair;
                 changed = true;
+                self.retry_at = None;
+            } else {
+                self.retry_at = Some(Instant::now() + RETRY_AFTER);
             }
             self.pending = None;
             break;
@@ -80,6 +94,7 @@ impl CoverWorker {
         self.pending = None;
         self.key = None;
         self.art = None;
+        self.retry_at = None;
         while self.rx.try_recv().is_ok() {}
         self.last = None;
     }
@@ -178,7 +193,10 @@ fn remote_art(url: &str) -> Option<PathBuf> {
         .arg(url)
         .status()
         .ok()?;
-    (!st.success() || !file.exists()).then_some(())?;
+    if !st.success() || !file.exists() {
+        let _ = std::fs::remove_file(&file);
+        return None;
+    }
     Some(file)
 }
 
@@ -192,8 +210,16 @@ fn resolve_art(url: &str) -> Option<PathBuf> {
 
 fn extract_art(url: &str) -> Option<Pair> {
     let path = resolve_art(url)?;
-    let bytes = std::fs::read(path).ok()?;
-    let img = image::load_from_memory(&bytes).ok()?;
+    let bytes = std::fs::read(&path).ok()?;
+    let img = match image::load_from_memory(&bytes) {
+        Ok(img) => img,
+        Err(_) => {
+            if url.starts_with("http://") || url.starts_with("https://") {
+                let _ = std::fs::remove_file(&path);
+            }
+            return None;
+        }
+    };
     let img = img.to_rgba8();
     let (w, h) = (img.width().max(1), img.height().max(1));
     let step_x = (w / 64).max(1);
@@ -443,5 +469,33 @@ mod tests {
         w.set_target("k", "");
         assert!(w.pair().is_none());
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn cover_worker_retries_failed_art() {
+        let url = "/definitely-not-real/sharkvis-cover.jpg";
+        let mut w = CoverWorker::new();
+        w.set_target("k", url);
+        let mut failed = false;
+        for _ in 0..300 {
+            if w.poll() {
+                break;
+            }
+            if w.pending.is_none() {
+                failed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(failed, "a missing cover should fail without a pair");
+        assert!(w.last.is_none());
+        assert!(w.retry_at.is_some(), "failed art must schedule a retry");
+
+        w.set_target("k", url);
+        assert!(w.pending.is_none(), "no hot-loop retry before the delay");
+
+        w.retry_at = Some(Instant::now() - Duration::from_millis(1));
+        w.set_target("k", url);
+        assert!(w.pending.is_some(), "art is retried after the delay");
     }
 }

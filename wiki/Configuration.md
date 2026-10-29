@@ -85,10 +85,13 @@ panel save automatically when you close it.
   back to the configured gradient while the file is absent. This mode
   always renders just those two colors with no blend, and the settings
   panel hides the `gradient` row while it is selected. Switching to
-  `custom` or `mpris` and back returns to the same jefetch pair.
+  `custom` or `mpris` and back returns to the same jefetch pair. While
+  this mode is active jefetch leaves its own logo in its normal theme
+  colors, so only the sharkvis visualizer picks up the pair.
 - `mpris`: two vivid colors extracted from the playing track's album
   cover (the active MPRIS player's `mpris:artUrl`, fetched to
-  `~/.cache/sharkvis/covers/`). Without a cover — nothing playing, no
+  `~/.cache/sharkvis/covers/`). Unreadable art is retried instead of
+  being remembered as missing. Without a cover — nothing playing, no
   art URL, or a cover too plain to yield two distinct colors — it falls
   back to the configured gradient. Switching to a track without art
   drops back to the fallback colors, not the previous cover's.
