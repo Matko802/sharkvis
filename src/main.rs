@@ -1345,6 +1345,25 @@ mod tests {
         cfg.gradient_high = "ffffff".to_string();
         cfg.gradient_amt = 256;
         let mut rnd = Renderer::new(24, 80, 2, 1, 8);
+        cfg.colors = "mpris".to_string();
+        apply_colors(
+            &mut rnd,
+            &cfg,
+            Some(((0x12, 0x34, 0x56), (0x65, 0x43, 0x21))),
+        );
+        assert_eq!(
+            (rnd.grad_lo, rnd.grad_hi),
+            (0x123456, 0x654321),
+            "cover colors land first"
+        );
+        cfg.colors.clear();
+        apply_colors(&mut rnd, &cfg, None);
+        assert_eq!(
+            (rnd.grad_lo, rnd.grad_hi),
+            (0x000000, 0xffffff),
+            "custom returns to the configured ends"
+        );
+        cfg.colors = "jefetch".to_string();
         apply_colors(&mut rnd, &cfg, None);
         assert_eq!(
             (rnd.grad_lo, rnd.grad_hi),
