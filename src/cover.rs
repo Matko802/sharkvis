@@ -11,8 +11,9 @@ const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 pub struct CoverWorker {
     tx: Sender<(String, String)>,
-    rx: Receiver<(String, Option<Pair>)>,
+    rx: Receiver<(String, String, Option<Pair>)>,
     last: Option<Pair>,
+    last_target: Option<(String, String)>,
     pending: Option<String>,
     key: Option<String>,
     art: Option<String>,
@@ -22,11 +23,14 @@ pub struct CoverWorker {
 impl CoverWorker {
     pub fn new() -> CoverWorker {
         let (tx, job_rx): (Sender<(String, String)>, Receiver<(String, String)>) = mpsc::channel();
-        let (res_tx, rx): (Sender<(String, Option<Pair>)>, Receiver<(String, Option<Pair>)>) =
-            mpsc::channel();
+        let (res_tx, rx): (
+            Sender<(String, String, Option<Pair>)>,
+            Receiver<(String, String, Option<Pair>)>,
+        ) = mpsc::channel();
         std::thread::spawn(move || {
             for (key, url) in job_rx {
-                if res_tx.send((key, extract_art(&url))).is_err() {
+                let pair = extract_art(&url);
+                if res_tx.send((key, url, pair)).is_err() {
                     break;
                 }
             }
@@ -35,6 +39,7 @@ impl CoverWorker {
             tx,
             rx,
             last: None,
+            last_target: None,
             pending: None,
             key: None,
             art: None,
@@ -49,7 +54,11 @@ impl CoverWorker {
             return;
         }
         if self.key.as_deref() == Some(key) && self.art.as_deref() == Some(art) {
-            if self.pending.is_some() || self.last.is_some() {
+            let done = self
+                .last_target
+                .as_ref()
+                .is_some_and(|(k, a)| k == key && a == art);
+            if self.pending.is_some() || done {
                 return;
             }
             if self.retry_at.is_some_and(|t| Instant::now() < t) {
@@ -68,13 +77,15 @@ impl CoverWorker {
             return false;
         };
         let key = key.clone();
+        let art = self.art.clone().unwrap_or_default();
         let mut changed = false;
-        while let Ok((got, pair)) = self.rx.try_recv() {
-            if got != key {
+        while let Ok((got, got_art, pair)) = self.rx.try_recv() {
+            if got != key || got_art != art {
                 continue;
             }
             if pair.is_some() {
                 self.last = pair;
+                self.last_target = Some((got, got_art));
                 changed = true;
                 self.retry_at = None;
             } else {
@@ -97,6 +108,7 @@ impl CoverWorker {
         self.retry_at = None;
         while self.rx.try_recv().is_ok() {}
         self.last = None;
+        self.last_target = None;
     }
 }
 
@@ -128,6 +140,7 @@ fn percent_decode(s: &str) -> String {
 
 fn local_art(url: &str) -> Option<PathBuf> {
     let p = if let Some(rest) = url.strip_prefix("file://") {
+        let rest = rest.split(['?', '#']).next().unwrap_or(rest);
         let p = percent_decode(rest);
         if p.starts_with("localhost/") {
             format!("/{}", &p["localhost/".len()..])
@@ -438,6 +451,20 @@ mod tests {
     }
 
     #[test]
+    fn local_art_ignores_uri_query_and_fragment() {
+        let dir = std::env::temp_dir().join(format!("sharkvis-cover-url-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cover space.png");
+        std::fs::write(&path, b"x").unwrap();
+        let url = format!(
+            "file://{}?v=1#frag",
+            path.to_string_lossy().replace(' ', "%20")
+        );
+        assert_eq!(local_art(&url), Some(path));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn cover_worker_extracts_via_thread() {
         let dir = std::env::temp_dir().join("sharkvis-cover-test");
         std::fs::create_dir_all(&dir).unwrap();
@@ -497,5 +524,72 @@ mod tests {
         w.retry_at = Some(Instant::now() - Duration::from_millis(1));
         w.set_target("k", url);
         assert!(w.pending.is_some(), "art is retried after the delay");
+    }
+
+    #[test]
+    fn retries_new_art_after_a_previous_cover_succeeded() {
+        let dir = std::env::temp_dir().join(format!("sharkvis-cover-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let make = |name: &str, c: Rgb| {
+            let path = dir.join(name);
+            let mut buf = image::RgbaImage::new(16, 16);
+            for y in 0..16 {
+                for x in 0..16 {
+                    let px = if x < 8 {
+                        c
+                    } else {
+                        (255 - c.0, 255 - c.1, 255 - c.2)
+                    };
+                    buf.put_pixel(x, y, image::Rgba([px.0, px.1, px.2, 255]));
+                }
+            }
+            buf.save(&path).unwrap();
+            path
+        };
+        let first = make("first.png", (204, 0, 0));
+        let late = dir.join("late.png");
+
+        let mut w = CoverWorker::new();
+        w.set_target("first", first.to_str().unwrap());
+        let mut done = false;
+        for _ in 0..300 {
+            if w.poll() {
+                done = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(done, "the first cover should load");
+        let old = w.pair();
+        assert!(old.is_some());
+
+        w.set_target("second", late.to_str().unwrap());
+        for _ in 0..300 {
+            w.poll();
+            if w.pending.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(w.last.is_some(), "the old pair is kept while retrying");
+        assert!(w.retry_at.is_some(), "the missing art must be retried");
+
+        make("late.png", (0, 90, 204));
+        w.retry_at = Some(Instant::now() - Duration::from_millis(1));
+        w.set_target("second", late.to_str().unwrap());
+        assert!(w.pending.is_some(), "a new track retries after a success");
+
+        let mut done = false;
+        for _ in 0..300 {
+            if w.poll() {
+                done = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(done, "the late cover should load on retry");
+        assert!(w.pair().is_some());
+        assert_ne!(w.pair(), old, "the new cover replaces the old pair");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

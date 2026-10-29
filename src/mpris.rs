@@ -133,11 +133,17 @@ fn fill_meta(t: &mut Track, player: &str) {
     t.player = player.to_string();
     let meta = cmd_out(
         "playerctl",
-        &["-p", player, "metadata", "--format", "{{artist}}|{{title}}|{{mpris:length}}|{{xesam:url}}|{{mpris:artUrl}}"],
+        &[
+            "-p",
+            player,
+            "metadata",
+            "--format",
+            "{{artist}}\x1f{{title}}\x1f{{mpris:length}}\x1f{{xesam:url}}\x1f{{mpris:artUrl}}",
+        ],
         500,
     )
     .unwrap_or_default();
-    let mut parts = meta.splitn(5, '|');
+    let mut parts = meta.splitn(5, '\x1f');
     t.artist = parts.next().unwrap_or("").trim().to_string();
     t.title = parts.next().unwrap_or("").trim().to_string();
     t.duration = parts

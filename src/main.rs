@@ -1153,8 +1153,10 @@ fn main() {
                 ""
             };
             cover.set_target(&key, &art);
-            if cover.poll() {
-                cover_colors = cover.pair();
+            cover.poll();
+            let colors = cover.pair();
+            if colors != cover_colors {
+                cover_colors = colors;
                 apply_colors(&mut rnd, &cfg, cover_colors);
                 force_draw = true;
             }
