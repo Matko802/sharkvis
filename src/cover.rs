@@ -382,11 +382,13 @@ fn pick_pair(px: &[[u8; 4]]) -> Option<(Rgb, Rgb)> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     clusters.truncate(12);
-    if clusters.len() < 2 {
+    let Some(first) = clusters.first().copied() else {
         return None;
+    };
+    if clusters.len() < 2 {
+        return single_hue_pair(first.rgb);
     }
 
-    let first = clusters[0];
     let mut best: Option<(f32, Cluster)> = None;
     for c in clusters.iter().skip(1) {
         let hd = hue_dist(first.hue, c.hue);
@@ -400,17 +402,31 @@ fn pick_pair(px: &[[u8; 4]]) -> Option<(Rgb, Rgb)> {
         }
     }
     let Some((_, second)) = best else {
-        return None;
+        return single_hue_pair(first.rgb);
     };
     let (a, b) = (boost(first.rgb), boost(second.rgb));
     if a == b || rgb_dist(a, b) < 40_u32 * 40 {
-        return None;
+        return single_hue_pair(first.rgb);
     }
     if lum(a) <= lum(b) {
         Some((a, b))
     } else {
         Some((b, a))
     }
+}
+
+fn single_hue_pair(c: Rgb) -> Option<Pair> {
+    let (h, s, v) = rgb_to_hsv(c);
+    if s < 0.22 || v < 0.15 {
+        return None;
+    }
+    let s = (s * 1.1).clamp(0.55, 1.0);
+    let lo = hsv_to_rgb(h, s, (v * 0.45).clamp(0.18, 0.5));
+    let hi = hsv_to_rgb(h, s, (v + 0.28).clamp(0.62, 0.95));
+    if lo == hi || rgb_dist(lo, hi) < 40_u32 * 40 {
+        return None;
+    }
+    Some((lo, hi))
 }
 
 fn lum(c: Rgb) -> f32 {
@@ -437,6 +453,16 @@ mod tests {
         .expect("valid pair");
         assert!(lum(got.0) <= lum(got.1));
         assert!(rgb_dist(got.0, got.1) > 40 * 40);
+    }
+
+    #[test]
+    fn single_hue_cover_gets_a_ramp() {
+        let got = pick_pair(&[px((25, 171, 170)); 32]).expect("teal cover pair");
+        assert!(lum(got.0) < lum(got.1));
+        assert!(rgb_dist(got.0, got.1) > 40 * 40);
+        let (h0, _, _) = rgb_to_hsv(got.0);
+        let (h1, _, _) = rgb_to_hsv(got.1);
+        assert!(hue_dist(h0, h1) < 5.0);
     }
 
     #[test]
