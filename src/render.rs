@@ -122,6 +122,15 @@ fn seek_cell(r: u32, c: u32, out: &mut Out) {
     out.s(b"H");
 }
 
+fn append_bytes(out: &mut Vec<u8>, cap: usize, bytes: &[u8]) {
+    if out.len() >= cap {
+        return;
+    }
+    let room = cap - out.len();
+    let take = bytes.len().min(room);
+    out.extend_from_slice(&bytes[..take]);
+}
+
 impl Renderer {
     fn index_color(&self, lo: &str, hi: &str, t: f64) -> Vec<u8> {
         if !self.color_256 && t > 0.0 && t < 1.0 {
@@ -694,7 +703,7 @@ impl Renderer {
         }
     }
 
-    fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
+    pub(crate) fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
         let t = xfrac.clamp(0.0, 1.0);
         if let Some((lo, hi)) = self.grad_idx.as_ref() {
             return self.index_color(lo, hi, t);
@@ -1061,6 +1070,7 @@ impl Renderer {
 
         let marker = 79u8;
         let esc = self.letter_color(0.5, 1.0);
+        let gradient = self.grad_idx.is_some();
         let grey_esc = if self.color_256 {
             b"\x1b[38;5;240m".to_vec()
         } else {
@@ -1143,15 +1153,30 @@ impl Renderer {
                 continue;
             }
             seek_cell(y as u32, x0 as u32, out);
-            if grey {
-                out.s(&grey_esc);
-            } else {
-                out.s(&esc);
+            if !gradient {
+                if grey {
+                    out.s(&grey_esc);
+                } else {
+                    out.s(&esc);
+                }
             }
             let mut cx = x0;
+            let denom = cells.saturating_sub(1).max(1);
             for c in line.iter() {
                 if cx >= x_end {
                     break;
+                }
+                if gradient {
+                    let t = if cells > 1 {
+                        (cx.saturating_sub(x0)) as f64 / denom as f64
+                    } else {
+                        0.5
+                    };
+                    let col = self.letter_color(t, if grey { 0.35 } else { 1.0 });
+                    if grey {
+                        out.s(b"\x1b[2m");
+                    }
+                    out.s(&col);
                 }
                 for _ in 0..Self::cell_width(*c) {
                     if cx >= x_end {
@@ -1161,6 +1186,9 @@ impl Renderer {
                     cx += 1;
                 }
                 out.s(c.encode_utf8(&mut enc).as_bytes());
+            }
+            if gradient {
+                out.s(b"\x1b[22m");
             }
         }
         for y in 0..rows {
@@ -1319,6 +1347,68 @@ impl Renderer {
                     self.prev[idx] = 0;
                 }
             }
+        }
+    }
+
+    pub(crate) fn draw_big_line(
+        &self,
+        out: &mut Vec<u8>,
+        cap: usize,
+        y: usize,
+        x0: usize,
+        max_w: usize,
+        text: &str,
+        dim: bool,
+    ) {
+        if max_w == 0 {
+            return;
+        }
+        let mut picked: Vec<(BigGlyph, usize)> = Vec::new();
+        let mut total = 0usize;
+        for c in text.chars() {
+            let (g, w, h) = Self::resolve_glyph(c);
+            let (g, w) = if h == 7 { (g, w) } else { (BigGlyph::Blank, 5) };
+            let adv = w + 1;
+            if !picked.is_empty() && total + adv > max_w + 1 {
+                break;
+            }
+            total += adv;
+            picked.push((g, w));
+        }
+        let n = picked.len();
+        if n == 0 {
+            return;
+        }
+        let line_w = total.saturating_sub(1);
+        let x_start = x0 + max_w.saturating_sub(line_w) / 2;
+        let dim_on = dim && self.grad_idx.is_some();
+        if dim_on {
+            append_bytes(out, cap, b"\x1b[2m");
+        }
+        let v = if dim { 0.35 } else { 1.0 };
+        let mut x = x_start;
+        for (k, (g, w)) in picked.iter().enumerate() {
+            let xfrac = (k as f64 + 0.5) / n as f64;
+            let esc = self.letter_color(xfrac, v);
+            for row in 0..7 {
+                append_bytes(
+                    out,
+                    cap,
+                    format!("\x1b[{};{}H", y + row + 1, x + 1).as_bytes(),
+                );
+                append_bytes(out, cap, &esc);
+                for px in 0..*w {
+                    if Self::glyph_on(g, px, row, 7) {
+                        append_bytes(out, cap, "\u{2588}".as_bytes());
+                    } else {
+                        append_bytes(out, cap, b" ");
+                    }
+                }
+            }
+            x += w + 1;
+        }
+        if dim_on {
+            append_bytes(out, cap, b"\x1b[22m");
         }
     }
 
@@ -2209,6 +2299,31 @@ mod tests {
         assert!(text.contains("yesterday") && text.contains("here") && text.contains("tomorrow"), "all three lines must show, got {:?}", &text[..text.len().min(160)]);
         assert!(text.contains("\x1b[38;2;96;96;96m"), "context lines must be forced grey");
         assert!(text.contains("\x1b[38;2;128;128;128m"), "current line fixed full brightness");
+    }
+
+    #[test]
+    fn small_text_follows_the_index_gradient() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.grad_idx = Some(("34".to_string(), "36".to_string()));
+        r.grad_amt = 2;
+        r.set_rich(&[
+            ("yesterday".to_string(), false),
+            ("here".to_string(), true),
+            ("tomorrow".to_string(), false),
+        ]);
+        r.text_small = true;
+        let mut out = Vec::new();
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(
+            text.contains("\x1b[38;2;0;26;234m"),
+            "index pair must ramp through truecolor, got {:?}",
+            &text[..text.len().min(240)]
+        );
+        assert!(
+            !text.contains("\x1b[38;2;96;96;96m"),
+            "gradient span must not fall back to flat grey"
+        );
     }
 
     #[test]
