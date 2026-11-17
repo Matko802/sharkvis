@@ -689,38 +689,6 @@ impl Renderer {
         }
     }
 
-    fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
-        let t = xfrac.clamp(0.0, 1.0);
-        if let Some((lo, hi)) = self.grad_idx.as_ref() {
-            return self.index_color(lo, hi, t);
-        }
-        let lo_r = ((self.grad_lo >> 16) & 0xff) as f64;
-        let lo_g = ((self.grad_lo >> 8) & 0xff) as f64;
-        let lo_b = (self.grad_lo & 0xff) as f64;
-        let hi_r = ((self.grad_hi >> 16) & 0xff) as f64;
-        let hi_g = ((self.grad_hi >> 8) & 0xff) as f64;
-        let hi_b = (self.grad_hi & 0xff) as f64;
-        let b = 0.10 + 0.90 * v.clamp(0.0, 1.0);
-        let mix = |l: f64, h: f64| ((l + (h - l) * t) * b + 0.5).clamp(0.0, 255.0) as u32;
-        let (cr, cg, cb) = (mix(lo_r, hi_r), mix(lo_g, hi_g), mix(lo_b, hi_b));
-        let mut o = Vec::with_capacity(20);
-        if self.color_256 {
-            let idx = 16 + 36 * ((cr * 6) / 256) + 6 * ((cg * 6) / 256) + (cb * 6) / 256;
-            o.extend_from_slice(b"\x1b[38;5;");
-            o.extend_from_slice(idx.to_string().as_bytes());
-            o.push(b'm');
-        } else {
-            o.extend_from_slice(b"\x1b[38;2;");
-            o.extend_from_slice(cr.to_string().as_bytes());
-            o.push(b';');
-            o.extend_from_slice(cg.to_string().as_bytes());
-            o.push(b';');
-            o.extend_from_slice(cb.to_string().as_bytes());
-            o.push(b'm');
-        }
-        o
-    }
-
     fn wrap_chars(
         chars: &[char],
         widths: &[usize],
@@ -937,6 +905,7 @@ impl Renderer {
         if rows == 0 || region_w == 0 {
             return;
         }
+        self.row_colors();
         const POS: [(usize, usize); 8] =
             [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1)];
         let now = std::time::Instant::now();
@@ -951,8 +920,6 @@ impl Renderer {
         let oy = rows.saturating_sub(2 * py + bh) / 2;
         let x_end = (x_start + region_w).min(cols);
         let full = self.render_glyph(8).to_vec();
-        let esc_on = self.letter_color(0.5, 1.0);
-        let esc_off = self.letter_color(0.5, 0.12);
         let mut boxes: Vec<(usize, usize)> = Vec::new();
         for (i, &(gc, gr)) in POS.iter().enumerate() {
             let on = i == active;
@@ -982,7 +949,10 @@ impl Renderer {
                     break;
                 }
                 seek_cell(y as u32, bx as u32, out);
-                out.s(if on { &esc_on } else { &esc_off });
+                if !on {
+                    out.s(b"\x1b[2m");
+                }
+                out.s(&self.row_col[y]);
                 for dx in 0..bw {
                     let x = bx + dx;
                     if x >= x_end {
@@ -990,6 +960,9 @@ impl Renderer {
                     }
                     self.prev[y * cols + x] = marker;
                     out.s(&full);
+                }
+                if !on {
+                    out.s(b"\x1b[22m");
                 }
             }
         }
@@ -1053,15 +1026,9 @@ impl Renderer {
             self.clear_text_region(x_start, region_w, out);
             return;
         }
+        self.row_colors();
 
         let marker = 79u8;
-        let esc = self.letter_color(0.5, 1.0);
-        let gradient = self.grad_idx.is_some();
-        let grey_esc = if self.color_256 {
-            b"\x1b[38;5;240m".to_vec()
-        } else {
-            b"\x1b[38;2;96;96;96m".to_vec()
-        };
         let dim = self.text_dim.clone();
         let mut paras: Vec<(usize, usize)> = Vec::new();
         let mut start = 0;
@@ -1139,30 +1106,14 @@ impl Renderer {
                 continue;
             }
             seek_cell(y as u32, x0 as u32, out);
-            if !gradient {
-                if grey {
-                    out.s(&grey_esc);
-                } else {
-                    out.s(&esc);
-                }
+            if grey {
+                out.s(b"\x1b[2m");
             }
+            out.s(&self.row_col[y]);
             let mut cx = x0;
-            let denom = cells.saturating_sub(1).max(1);
             for c in line.iter() {
                 if cx >= x_end {
                     break;
-                }
-                if gradient {
-                    let t = if cells > 1 {
-                        (cx.saturating_sub(x0)) as f64 / denom as f64
-                    } else {
-                        0.5
-                    };
-                    let col = self.letter_color(t, if grey { 0.35 } else { 1.0 });
-                    if grey {
-                        out.s(b"\x1b[2m");
-                    }
-                    out.s(&col);
                 }
                 for _ in 0..Self::cell_width(*c) {
                     if cx >= x_end {
@@ -1173,7 +1124,7 @@ impl Renderer {
                 }
                 out.s(c.encode_utf8(&mut enc).as_bytes());
             }
-            if gradient {
+            if grey {
                 out.s(b"\x1b[22m");
             }
         }
@@ -1211,6 +1162,7 @@ impl Renderer {
             self.clear_text_region(x_start, region_w, out);
             return;
         }
+        self.row_colors();
         let ys = self.yscale.max(1);
         let (s, lines) = Self::layout_text(&text, region_w, rows, self.focus, self.text_size, ys);
         if lines.is_empty() {
@@ -1256,10 +1208,9 @@ impl Renderer {
                 let (g, w, _) = &gs[k];
                 let box_w = if k + 1 < line.len() { (w + 1) * s } else { w * s };
 
-                let v = if dim.get(ci).copied().unwrap_or(false) { 0.35 } else { 1.0 };
+                let dimmed = dim.get(ci).copied().unwrap_or(false);
+                let v = if dimmed { 0.35 } else { 1.0 };
                 let marker = 64 + (v * 15.0 + 0.5) as u8;
-                let xfrac = (k as f64 + 0.5) / line.len() as f64;
-                let esc = self.letter_color(xfrac, v);
                 boxes.push((x0, y0, box_w, lh));
                 let mut changed = false;
                 for gr in 0..lh {
@@ -1292,7 +1243,10 @@ impl Renderer {
                             break;
                         }
                         seek_cell(y as u32, x0 as u32, out);
-                        out.s(&esc);
+                        if dimmed {
+                            out.s(b"\x1b[2m");
+                        }
+                        out.s(&self.row_col[y]);
                         for px in 0..box_w {
                             let x = x0 + px;
                             if x >= x_end {
@@ -1307,6 +1261,9 @@ impl Renderer {
                             } else {
                                 out.s(b" ");
                             }
+                        }
+                        if dimmed {
+                            out.s(b"\x1b[22m");
                         }
                     }
                 }
@@ -2070,13 +2027,16 @@ mod tests {
         let mut out = Vec::new();
         r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "first letter at fixed brightness, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;191;191;191m"), "second letter at fixed brightness, got {:?}", &text[..text.len().min(200)]);
+        let first = String::from_utf8_lossy(&r.row_col[8]).into_owned();
+        let last = String::from_utf8_lossy(&r.row_col[14]).into_owned();
+        assert!(text.contains(&first), "top row color, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains(&last), "bottom row color, got {:?}", &text[..text.len().min(200)]);
         assert!(!text.contains("19;19;19"), "no audio-driven dimming");
+        assert!(!text.contains("\x1b[2m"), "normal lyrics are not faint");
     }
 
     #[test]
-    fn wrapped_line_restarts_gradient() {
+    fn wrapped_lines_follow_the_row_gradient() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("A\nZY");
         r.grad_lo = 0x000000;
@@ -2084,8 +2044,11 @@ mod tests {
         let mut out = Vec::new();
         r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "second line must restart at low, got {:?}", &text[..text.len().min(200)]);
-        assert!(!text.contains("\x1b[38;2;160;160;160m"), "no global-index bleed");
+        let top = String::from_utf8_lossy(&r.row_col[4]).into_owned();
+        let bottom = String::from_utf8_lossy(&r.row_col[18]).into_owned();
+        assert!(text.contains(&top), "first line uses the top row color, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains(&bottom), "second line uses the bottom row color, got {:?}", &text[..text.len().min(200)]);
+        assert_ne!(top, bottom, "lines must not restart a horizontal gradient");
     }
 
     #[test]
@@ -2124,51 +2087,6 @@ mod tests {
     }
 
     #[test]
-    fn indexed_letter_color_interpolates_256_pairs() {
-        let mut r = Renderer::new(24, 80, 2, 1, 8);
-        r.color_256 = true;
-        r.grad_idx = Some(("38;5;32".to_string(), "38;5;221".to_string()));
-        let left = r.letter_color(0.0, 1.0);
-        let right = r.letter_color(1.0, 1.0);
-        let s = std::str::from_utf8(&left).unwrap();
-        let e = std::str::from_utf8(&right).unwrap();
-        assert_eq!(s, "\x1b[38;5;32m");
-        assert_eq!(e, "\x1b[38;5;221m");
-        let mid = r.letter_color(0.545, 1.0);
-        let m = std::str::from_utf8(&mid).unwrap();
-        assert!(m.starts_with("\x1b[38;5;"));
-        let mid_num: u8 = m.rsplit(';').next().unwrap().trim_end_matches('m').parse().unwrap();
-        assert_ne!(mid_num, 32);
-        assert_ne!(mid_num, 221);
-        let base = r.letter_color(0.5, 1.0);
-        let bs = std::str::from_utf8(&base).unwrap();
-        assert!(bs.starts_with("\x1b[38;5;"));
-    }
-
-    #[test]
-    fn indexed_letter_color_uses_terminal_palette_between_base_ends() {
-        let mut r = Renderer::new(24, 80, 2, 1, 8);
-        r.grad_idx = Some(("34".to_string(), "36".to_string()));
-        let left = r.letter_color(0.0, 1.0);
-        let right = r.letter_color(1.0, 1.0);
-        assert_eq!(left, b"\x1b[34m".to_vec());
-        assert_eq!(right, b"\x1b[36m".to_vec());
-        let mut seen = std::collections::HashSet::new();
-        for i in 1..64 {
-            let c = r.letter_color(i as f64 / 64.0, 1.0);
-            let s = std::str::from_utf8(&c).unwrap();
-            assert!(
-                s.starts_with("\x1b[38;5;")
-                    || s.starts_with("\x1b[34m")
-                    || s.starts_with("\x1b[36m")
-            );
-            assert!(!s.starts_with("\x1b[38;2;"));
-            seen.insert(c);
-        }
-        assert!(seen.len() > 2, "expected a smooth base-pair ramp");
-    }
-
-    #[test]
     fn lyrics_brightness_is_fixed() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.set_text("AB");
@@ -2177,8 +2095,10 @@ mod tests {
         let mut out = Vec::new();
         r.draw_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "fixed brightness, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;191;191;191m"), "fixed brightness, got {:?}", &text[..text.len().min(200)]);
+        let top = String::from_utf8_lossy(&r.row_col[8]).into_owned();
+        let bottom = String::from_utf8_lossy(&r.row_col[14]).into_owned();
+        assert!(text.contains(&top), "fixed top row color, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains(&bottom), "fixed bottom row color, got {:?}", &text[..text.len().min(200)]);
         assert!(!text.contains("19;19;19"), "no audio-driven dimming");
     }
 
@@ -2194,8 +2114,10 @@ mod tests {
         let mut out = Vec::new();
         r.draw_stereo(&left, &right, 4, 4, &mut out, 1 << 20);
         let text = String::from_utf8_lossy(&out).into_owned();
-        assert!(text.contains("\x1b[38;2;64;64;64m"), "left letter fixed bright, got {:?}", &text[..text.len().min(200)]);
-        assert!(text.contains("\x1b[38;2;191;191;191m"), "right letter fixed bright, got {:?}", &text[..text.len().min(200)]);
+        let top = String::from_utf8_lossy(&r.row_col[8]).into_owned();
+        let bottom = String::from_utf8_lossy(&r.row_col[14]).into_owned();
+        assert!(text.contains(&top), "fixed top row color, got {:?}", &text[..text.len().min(200)]);
+        assert!(text.contains(&bottom), "fixed bottom row color, got {:?}", &text[..text.len().min(200)]);
         assert!(!text.contains("19;19;19"), "no audio-driven dimming");
     }
 
@@ -2227,12 +2149,16 @@ mod tests {
         r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(text.contains("yesterday") && text.contains("here") && text.contains("tomorrow"), "all three lines must show, got {:?}", &text[..text.len().min(160)]);
-        assert!(text.contains("\x1b[38;2;96;96;96m"), "context lines must be forced grey");
-        assert!(text.contains("\x1b[38;2;128;128;128m"), "current line fixed full brightness");
+        let top = String::from_utf8_lossy(&r.row_col[10]).into_owned();
+        let current = String::from_utf8_lossy(&r.row_col[11]).into_owned();
+        let bottom = String::from_utf8_lossy(&r.row_col[12]).into_owned();
+        assert!(text.contains(&format!("\x1b[2m{top}")), "context line is faint but keeps the row color");
+        assert!(text.contains(&format!("\x1b[2m{bottom}")), "context line is faint but keeps the row color");
+        assert!(text.contains(&current), "current line keeps full row color");
     }
 
     #[test]
-    fn small_text_follows_the_index_gradient() {
+    fn small_text_follows_the_row_gradient() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.grad_idx = Some(("34".to_string(), "36".to_string()));
         r.grad_amt = 2;
@@ -2245,24 +2171,19 @@ mod tests {
         let mut out = Vec::new();
         r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
+        let top = String::from_utf8_lossy(&r.row_col[10]).into_owned();
+        let current = String::from_utf8_lossy(&r.row_col[11]).into_owned();
+        let bottom = String::from_utf8_lossy(&r.row_col[12]).into_owned();
+        assert_eq!(top, "\x1b[36m");
+        assert_eq!(current, "\x1b[36m");
+        assert_eq!(bottom, "\x1b[34m");
+        assert!(text.contains(&format!("\x1b[2m{top}")), "context line uses the top terminal color");
+        assert!(text.contains(&current), "current line uses the same rule as the visualizer");
+        assert!(text.contains(&format!("\x1b[2m{bottom}")), "context line uses the bottom terminal color");
         assert!(
-            text.contains("\x1b[34m"),
-            "index pair must start on the terminal palette, got {:?}",
+            !text.contains("\x1b[38;2;") && !text.contains("\x1b[38;5;"),
+            "lyrics must use the same two terminal colors as bars, got {:?}",
             &text[..text.len().min(240)]
-        );
-        assert!(
-            text.contains("\x1b[38;5;"),
-            "index pair must ramp through terminal palette indexes, got {:?}",
-            &text[..text.len().min(240)]
-        );
-        assert!(
-            !text.contains("\x1b[38;2;"),
-            "index pair must not hardcode truecolor, got {:?}",
-            &text[..text.len().min(240)]
-        );
-        assert!(
-            !text.contains("\x1b[38;2;96;96;96m"),
-            "gradient span must not fall back to flat grey"
         );
     }
 
