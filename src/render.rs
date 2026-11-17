@@ -124,11 +124,6 @@ fn seek_cell(r: u32, c: u32, out: &mut Out) {
 
 impl Renderer {
     fn index_color(&self, lo: &str, hi: &str, t: f64) -> Vec<u8> {
-        if !self.color_256 && t > 0.0 && t < 1.0 {
-            if let Some((r, g, b)) = crate::palette::ramp_rgb(lo, hi, t) {
-                return format!("\x1b[38;2;{};{};{}m", r, g, b).into_bytes();
-            }
-        }
         if let Some(spec) = crate::palette::ramp_spec(lo, hi, t) {
             return format!("\x1b[{}m", spec).into_bytes();
         }
@@ -2151,7 +2146,7 @@ mod tests {
     }
 
     #[test]
-    fn indexed_letter_color_uses_24bit_between_base_ends() {
+    fn indexed_letter_color_uses_terminal_palette_between_base_ends() {
         let mut r = Renderer::new(24, 80, 2, 1, 8);
         r.grad_idx = Some(("34".to_string(), "36".to_string()));
         let left = r.letter_color(0.0, 1.0);
@@ -2161,7 +2156,13 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for i in 1..64 {
             let c = r.letter_color(i as f64 / 64.0, 1.0);
-            assert!(std::str::from_utf8(&c).unwrap().starts_with("\x1b[38;2;"));
+            let s = std::str::from_utf8(&c).unwrap();
+            assert!(
+                s.starts_with("\x1b[38;5;")
+                    || s.starts_with("\x1b[34m")
+                    || s.starts_with("\x1b[36m")
+            );
+            assert!(!s.starts_with("\x1b[38;2;"));
             seen.insert(c);
         }
         assert!(seen.len() > 2, "expected a smooth base-pair ramp");
@@ -2245,8 +2246,18 @@ mod tests {
         r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
         let text = String::from_utf8_lossy(&out).into_owned();
         assert!(
-            text.contains("\x1b[38;2;0;26;234m"),
-            "index pair must ramp through truecolor, got {:?}",
+            text.contains("\x1b[34m"),
+            "index pair must start on the terminal palette, got {:?}",
+            &text[..text.len().min(240)]
+        );
+        assert!(
+            text.contains("\x1b[38;5;"),
+            "index pair must ramp through terminal palette indexes, got {:?}",
+            &text[..text.len().min(240)]
+        );
+        assert!(
+            !text.contains("\x1b[38;2;"),
+            "index pair must not hardcode truecolor, got {:?}",
             &text[..text.len().min(240)]
         );
         assert!(
