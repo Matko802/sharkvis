@@ -31,7 +31,7 @@ use crate::settings::{SettingsUi, CH_AUDIO, CH_DSP, CH_EDITOR, CH_LAYOUT};
 use crate::term::{
     mouse_decode, term_cell_aspect, term_mouse_enter, term_mouse_leave, term_raw_enter,
     term_raw_restore, term_read_codepoint, term_winsize, KEY_BACKSPACE, KEY_CHAR, KEY_ENTER,
-    KEY_ESC, KEY_MOUSE, KEY_NONE,
+    KEY_ESC, KEY_MOUSE,
 };
 
 const VIS_EPS: f64 = 0.001;
@@ -75,6 +75,23 @@ fn usage() {
 
 fn print_version() {
     println!("sharkvis {}", VERSION);
+}
+
+fn panel_width_for(cols: u32) -> usize {
+    let mut pw = cols / 3;
+    if pw < 28 {
+        pw = 28;
+    }
+    if pw > 44 {
+        pw = 44;
+    }
+    if pw >= cols {
+        pw = if cols > 2 { cols / 2 } else { 1 };
+    }
+    if pw < 1 {
+        pw = 1;
+    }
+    pw as usize
 }
 
 fn bar_count_for(cols: u32, cfg: &Config) -> usize {
@@ -754,7 +771,7 @@ fn main() {
             } else {
                 if key == KEY_MOUSE {
                     if let Some((_, x, y)) = mouse_decode(&cp[..clen]) {
-                        st.click(&mut cfg, y as u32, x as u32, rows, cols, &mut chmask);
+                        st.click(&mut cfg, y as u32, x as u32, panel_width_for(cols), &mut chmask);
                     }
                 } else {
                     st.key(
@@ -781,7 +798,7 @@ fn main() {
                     apply_settings(
                         &mut dsp, &mut rnd, &mut audio, &mut cfg, &mut bars, &mut heights,
                         &mut last_h, rows, cols, chmask, (chmask & CH_AUDIO) != 0,
-                        0, cover_colors,
+                        panel_width_for(cols), cover_colors,
                     );
 
                     cfg_dirty = true;
@@ -795,8 +812,6 @@ fn main() {
                         let _ = so.flush();
                     }
                     chmask = 0;
-                }
-                if key != KEY_NONE {
                     force_draw = true;
                 }
             }
@@ -811,7 +826,7 @@ fn main() {
                     let _ = so.write_all(CLEAR_ESC);
                     let _ = so.flush();
                 }
-                rnd.set_offset(0);
+                rnd.set_offset(panel_width_for(cols));
                 force_draw = true;
             } else if is_k(key, &cp[..clen], b'q')
                 || is_k(key, &cp[..clen], b'Q')
@@ -923,6 +938,9 @@ fn main() {
                 rnd.resize(rows as usize, cols as usize, bars);
                 auto_yscale = yscale_for(1);
                 rnd.yscale = auto_yscale;
+                if in_settings {
+                    rnd.set_offset(panel_width_for(cols));
+                }
                 {
                     let stdout = std::io::stdout();
                     let mut so = stdout.lock();
@@ -1173,8 +1191,8 @@ fn main() {
             rnd.set_rich(&rows);
         }
 
-        let mut need_draw = force_draw;
-        if !need_draw && !in_settings {
+        let mut need_draw = force_draw || in_settings;
+        if !need_draw {
 
             if rnd.mode == RenderMode::Bars
             {
@@ -1220,18 +1238,17 @@ fn main() {
 
             out.clear();
             if in_settings {
-                st.draw(&cfg, &rnd, &mut out, OUT_CAP, rows, cols);
+                st.draw(&cfg, &mut out, OUT_CAP, rows, panel_width_for(cols));
+            }
+            if cfg.channels > 1 {
+                rnd.draw_stereo(&heights[0], &heights[1], pcl, pcr, &mut out, OUT_CAP);
             } else {
-                if cfg.channels > 1 {
-                    rnd.draw_stereo(&heights[0], &heights[1], pcl, pcr, &mut out, OUT_CAP);
-                } else {
-                    rnd.draw(&heights[0], &mut out, OUT_CAP);
-                }
-                if let Some(buf) = search_buf.as_ref() {
-                    let line = format!("\x1b[0m\x1b[{};1Hsearch: {}_", rows, buf);
-                    if out.len() + line.len() < OUT_CAP {
-                        out.extend_from_slice(line.as_bytes());
-                    }
+                rnd.draw(&heights[0], &mut out, OUT_CAP);
+            }
+            if let Some(buf) = search_buf.as_ref() {
+                let line = format!("\x1b[0m\x1b[{};1Hsearch: {}_", rows, buf);
+                if out.len() + line.len() < OUT_CAP {
+                    out.extend_from_slice(line.as_bytes());
                 }
             }
             if !out.is_empty() {

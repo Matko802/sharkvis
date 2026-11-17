@@ -122,15 +122,6 @@ fn seek_cell(r: u32, c: u32, out: &mut Out) {
     out.s(b"H");
 }
 
-fn append_bytes(out: &mut Vec<u8>, cap: usize, bytes: &[u8]) {
-    if out.len() >= cap {
-        return;
-    }
-    let room = cap - out.len();
-    let take = bytes.len().min(room);
-    out.extend_from_slice(&bytes[..take]);
-}
-
 impl Renderer {
     fn index_color(&self, lo: &str, hi: &str, t: f64) -> Vec<u8> {
         if !self.color_256 && t > 0.0 && t < 1.0 {
@@ -703,7 +694,7 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
+    fn letter_color(&self, xfrac: f64, v: f64) -> Vec<u8> {
         let t = xfrac.clamp(0.0, 1.0);
         if let Some((lo, hi)) = self.grad_idx.as_ref() {
             return self.index_color(lo, hi, t);
@@ -1347,68 +1338,6 @@ impl Renderer {
                     self.prev[idx] = 0;
                 }
             }
-        }
-    }
-
-    pub(crate) fn draw_big_line(
-        &self,
-        out: &mut Vec<u8>,
-        cap: usize,
-        y: usize,
-        x0: usize,
-        max_w: usize,
-        text: &str,
-        dim: bool,
-    ) {
-        if max_w == 0 {
-            return;
-        }
-        let mut picked: Vec<(BigGlyph, usize)> = Vec::new();
-        let mut total = 0usize;
-        for c in text.chars() {
-            let (g, w, h) = Self::resolve_glyph(c);
-            let (g, w) = if h == 7 { (g, w) } else { (BigGlyph::Blank, 5) };
-            let adv = w + 1;
-            if !picked.is_empty() && total + adv > max_w + 1 {
-                break;
-            }
-            total += adv;
-            picked.push((g, w));
-        }
-        let n = picked.len();
-        if n == 0 {
-            return;
-        }
-        let line_w = total.saturating_sub(1);
-        let x_start = x0 + max_w.saturating_sub(line_w) / 2;
-        let dim_on = dim && self.grad_idx.is_some();
-        if dim_on {
-            append_bytes(out, cap, b"\x1b[2m");
-        }
-        let v = if dim { 0.35 } else { 1.0 };
-        let mut x = x_start;
-        for (k, (g, w)) in picked.iter().enumerate() {
-            let xfrac = (k as f64 + 0.5) / n as f64;
-            let esc = self.letter_color(xfrac, v);
-            for row in 0..7 {
-                append_bytes(
-                    out,
-                    cap,
-                    format!("\x1b[{};{}H", y + row + 1, x + 1).as_bytes(),
-                );
-                append_bytes(out, cap, &esc);
-                for px in 0..*w {
-                    if Self::glyph_on(g, px, row, 7) {
-                        append_bytes(out, cap, "\u{2588}".as_bytes());
-                    } else {
-                        append_bytes(out, cap, b" ");
-                    }
-                }
-            }
-            x += w + 1;
-        }
-        if dim_on {
-            append_bytes(out, cap, b"\x1b[22m");
         }
     }
 

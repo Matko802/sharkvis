@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use crate::config::{color_index, color_name, colors_mode, Config, DEFAULT_CHARS, PALETTE};
-use crate::render::Renderer;
+use crate::config::{color_index, color_name, colors_mode, Config, PALETTE};
 use crate::term::{KEY_CHAR, KEY_DOWN, KEY_ENTER, KEY_LEFT, KEY_RIGHT, KEY_UP};
 
 pub const CH_LAYOUT: u32 = 1 << 0;
@@ -36,30 +35,28 @@ const S_WAVESM: usize = 22;
 const S_COUNT: usize = 23;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
-const BAND_H: usize = 8;
-const BIG_HEADER_H: usize = 8;
 
 const LABELS: [&str; S_COUNT] = [
     "type",
     "bars",
     "bar width",
-    "bar gap",
+    "bar spacing",
     "framerate",
     "sensitivity",
     "autosens",
     "smoothing",
-    "low cutoff",
-    "high cutoff",
+    "lower cutoff",
+    "upper cutoff",
     "gradient",
     "color high",
     "color low",
     "sample rate",
     "channels",
     "charset",
-    "text size",
-    "text style",
+    "lyrics size",
+    "lyrics style",
     "provider",
-    "offset",
+    "offset ms",
     "colors",
     "align",
     "wave smooth",
@@ -98,7 +95,6 @@ pub struct SettingsUi {
     sel: usize,
     confirm_reset: bool,
     confirm_deadline_ms: i64,
-    offset: usize,
 }
 
 impl Default for SettingsUi {
@@ -107,7 +103,6 @@ impl Default for SettingsUi {
             sel: 0,
             confirm_reset: false,
             confirm_deadline_ms: 0,
-            offset: 0,
         }
     }
 }
@@ -436,79 +431,39 @@ impl SettingsUi {
         }
     }
 
-    fn header_rows(rows: u32) -> usize {
-        if rows as usize >= 32 {
-            BIG_HEADER_H
-        } else {
-            1
+    pub fn row_at_y(cfg: &Config, y: u32) -> Option<usize> {
+        let mut yy = 6u32;
+        for id in Self::visible_rows(cfg) {
+            if yy == y {
+                return Some(id);
+            }
+            yy += 1;
+            if id == S_MODE {
+                yy += 1;
+            }
         }
+        if yy == y {
+            return Some(S_RESET);
+        }
+        None
     }
 
-    fn visible_count(rows: u32) -> usize {
-        let hdr = Self::header_rows(rows);
-        let bands = (rows as usize).saturating_sub(hdr + 1) / BAND_H;
-        bands.max(1)
-    }
-
-    fn scroll_to_sel(&mut self, cfg: &Config, rows: u32) {
-        let ids = Self::nav_ids(cfg);
-        let vis = Self::visible_count(rows);
-        let max_off = ids.len().saturating_sub(vis);
-        if self.offset > max_off {
-            self.offset = max_off;
-        }
-        let pos = ids.iter().position(|&id| id == self.sel).unwrap_or(0);
-        if pos < self.offset {
-            self.offset = pos;
-        } else if pos >= self.offset + vis {
-            self.offset = pos + 1 - vis;
-        }
-    }
-
-    fn window_ids(&self, cfg: &Config, rows: u32) -> Vec<usize> {
-        let ids = Self::nav_ids(cfg);
-        let vis = Self::visible_count(rows);
-        let off = self.offset.min(ids.len().saturating_sub(vis));
-        ids.into_iter().skip(off).take(vis).collect()
-    }
-
-    fn band_at(&self, cfg: &Config, y: u32, rows: u32) -> Option<usize> {
-        let hdr = Self::header_rows(rows);
-        let y = y as usize;
-        if y < hdr {
-            return None;
-        }
-        let idx = (y - hdr) / BAND_H;
-        if idx >= Self::visible_count(rows) {
-            return None;
-        }
-        self.window_ids(cfg, rows).get(idx).copied()
-    }
-
-    pub fn click(
-        &mut self,
-        cfg: &mut Config,
-        y: u32,
-        x: u32,
-        rows: u32,
-        cols: u32,
-        changed: &mut u32,
-    ) {
-        if y >= rows || x >= cols {
+    pub fn click(&mut self, cfg: &mut Config, y: u32, x: u32, pw: usize, changed: &mut u32) {
+        if x == 0 || x as usize > pw {
             return;
         }
-        let Some(id) = self.band_at(cfg, y, rows) else {
+        let Some(id) = Self::row_at_y(cfg, y) else {
             return;
         };
-        self.sel = id;
-        self.confirm_reset = false;
         if id == S_RESET {
+            self.sel = S_RESET;
             self.handle_reset(cfg, changed);
             self.clamp_sel(cfg);
-            self.scroll_to_sel(cfg, rows);
             return;
         }
-        if x >= cols / 2 {
+        self.sel = id;
+        self.confirm_reset = false;
+        if x > pw as u32 / 2 {
             if id == S_CHARSET {
                 *changed |= CH_EDITOR;
             } else {
@@ -518,88 +473,50 @@ impl SettingsUi {
             Self::adjust(cfg, id, -1, changed);
         }
         self.clamp_sel(cfg);
-        self.scroll_to_sel(cfg, rows);
     }
 
-    pub fn draw(
-        &mut self,
-        cfg: &Config,
-        rnd: &Renderer,
-        out: &mut Vec<u8>,
-        cap: usize,
-        rows: u32,
-        cols: u32,
-    ) {
+    pub fn draw(&mut self, cfg: &Config, out: &mut Vec<u8>, cap: usize, rows: u32, pw: usize) {
         if self.confirm_reset && now_ms() > self.confirm_deadline_ms {
             self.confirm_reset = false;
         }
         self.clamp_sel(cfg);
-        self.scroll_to_sel(cfg, rows);
-        let rows = rows as usize;
-        let cols = cols as usize;
-        if rows == 0 || cols == 0 {
-            return;
-        }
-        append_esc(out, cap, b"\x1b[0m\x1b[2J");
-        let hdr = Self::header_rows(rows as u32);
-        if hdr >= BIG_HEADER_H {
-            rnd.draw_big_line(out, cap, 0, 0, cols, "sharkvis settings", false);
-        } else {
-            let esc = rnd.letter_color(0.0, 1.0);
-            append_esc(out, cap, b"\x1b[1;1H");
-            append_esc(out, cap, &esc);
-            append_esc(out, cap, b"sharkvis settings");
-            append_esc(out, cap, b"\x1b[0m");
-        }
-        let ids = self.window_ids(cfg, rows as u32);
-        let marker = rnd.letter_color(0.0, 1.0);
-        for (i, &id) in ids.iter().enumerate() {
-            let y = hdr + i * BAND_H;
-            if y + 7 > rows {
-                break;
-            }
-            let selected = id == self.sel;
-            let line = if id == S_RESET {
-                if self.confirm_reset {
-                    "reset? press again".to_string()
-                } else {
-                    "reset defaults".to_string()
-                }
-            } else {
-                format!("{}: {}", LABELS[id], format_value(cfg, id))
-            };
-            rnd.draw_big_line(
+        panel_row(out, cap, 1, pw, "sharkvis settings", None, None);
+        let mut y = 6;
+        for id in Self::visible_rows(cfg) {
+            let val = format_value(cfg, id);
+            panel_row(
                 out,
                 cap,
                 y,
-                3,
-                cols.saturating_sub(6),
-                &line,
-                !selected,
+                pw,
+                LABELS[id],
+                Some(&val),
+                if id == self.sel { Some("\x1b[7m") } else { None },
             );
-            if selected {
-                for row in 0..7 {
-                    append_esc(out, cap, format!("\x1b[{};2H", y + row + 1).as_bytes());
-                    append_esc(out, cap, &marker);
-                    append_esc(out, cap, "\u{2588}\u{2588}".as_bytes());
-                }
-                append_esc(out, cap, b"\x1b[0m");
+            y += 1;
+            if id == S_MODE {
+                append_esc(out, cap, format!("\x1b[0m\x1b[{};1H{}", y, "─".repeat(pw)).as_bytes());
+                y += 1;
             }
         }
-        let ids = Self::nav_ids(cfg);
-        let total = ids.len();
-        let pos = ids.iter().position(|&id| id == self.sel).unwrap_or(0) + 1;
-        let info = format!("{}/{} ", pos, total);
-        let hint = " \u{2191}\u{2193} select   \u{2190}\u{2192} change   enter edit   g close";
-        let left: String = hint.chars().take(cols.saturating_sub(info.chars().count())).collect();
-        let pad = cols.saturating_sub(left.chars().count() + info.chars().count());
-        let esc = rnd.letter_color(0.5, 0.7);
-        append_esc(out, cap, format!("\x1b[{};1H", rows).as_bytes());
-        append_esc(out, cap, &esc);
-        append_esc(out, cap, left.as_bytes());
-        append_esc(out, cap, " ".repeat(pad).as_bytes());
-        append_esc(out, cap, info.as_bytes());
-        append_esc(out, cap, b"\x1b[0m");
+        if self.confirm_reset {
+            panel_row(out, cap, y, pw, "Are you sure?", Some("press → again"), Some("\x1b[41m\x1b[97m"));
+        } else if self.sel == S_CHARSET {
+            panel_row(out, cap, y, pw, "edit bar symbols", Some("enter = nano"), None);
+        } else {
+            panel_row(
+                out,
+                cap,
+                y,
+                pw,
+                "reset to defaults",
+                Some("press →"),
+                if self.sel == S_RESET { Some("\x1b[7m") } else { None },
+            );
+        }
+        for yy in 1..=rows {
+            append_esc(out, cap, format!("\x1b[0m\x1b[{};{}H│", yy, pw).as_bytes());
+        }
     }
 }
 
@@ -647,13 +564,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_HIGH => format!("{}", cfg.higher_cutoff),
         S_RATE => format!("{}", cfg.sample_rate),
         S_CH => format!("{}", cfg.channels),
-        S_CHARSET => {
-            if cfg.chars == DEFAULT_CHARS {
-                "default".to_string()
-            } else {
-                "custom".to_string()
-            }
-        }
+        S_CHARSET => String::from_utf8_lossy(&cfg.chars).into_owned(),
         S_TEXTSIZE => {
             if cfg.text_size == 0 {
                 "auto".to_string()
@@ -663,11 +574,7 @@ fn format_value(cfg: &Config, id: usize) -> String {
         }
         S_PROVIDER => cfg.provider.clone(),
         S_OFFSET => format!("{:+}ms", cfg.lyric_offset_ms),
-        S_STYLE => match cfg.text_style.as_str() {
-            "big ahh" => "big".to_string(),
-            "normal" => "normal".to_string(),
-            other => other.to_string(),
-        },
+        S_STYLE => cfg.text_style.clone(),
         S_ALIGN => cfg.text_align.clone(),
         _ => String::new(),
     }
@@ -682,6 +589,63 @@ fn append_esc(out: &mut Vec<u8>, cap: usize, bytes: &[u8]) {
     out.extend_from_slice(&bytes[..take]);
 }
 
+fn panel_row(
+    out: &mut Vec<u8>,
+    cap: usize,
+    y: u32,
+    pw: usize,
+    label: &str,
+    val: Option<&str>,
+    style: Option<&str>,
+) {
+    let mut text: Vec<u8>;
+    if let Some(v) = val {
+        let mut lw = pw as i64 - 13;
+        if lw < 4 {
+            lw = 4;
+        }
+        if lw > 16 {
+            lw = 16;
+        }
+        text = format!("  {:<lw$} {:<10}", label, v, lw = lw as usize).into_bytes();
+    while text.len() > 256 {
+        text.pop();
+    }
+    } else {
+        text = format!("  {}", label).into_bytes();
+    }
+    let len = text.len();
+
+    let mut emit = 0usize;
+    let mut vis = 0usize;
+    let mut p = 0usize;
+    while p < len && vis < pw {
+        let c = text[p];
+        let seq = if c < 0x80 {
+            1
+        } else if (c & 0xE0) == 0xC0 {
+            2
+        } else if (c & 0xF0) == 0xE0 {
+            3
+        } else {
+            4
+        };
+        if vis + 1 > pw {
+            break;
+        }
+        vis += 1;
+        emit += seq;
+        p += seq;
+    }
+
+    let header = format!("\x1b[0m\x1b[{};1H{}", y, style.unwrap_or(""));
+    append_esc(out, cap, header.as_bytes());
+    append_esc(out, cap, &text[..emit]);
+    for _ in vis..pw {
+        append_esc(out, cap, b" ");
+    }
+    append_esc(out, cap, b"\x1b[0m");
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,37 +728,22 @@ mod tests {
         let mut cfg = Config::default();
         cfg.mode = "bars".to_string();
         let ids = SettingsUi::visible_rows(&cfg);
+        assert_eq!(SettingsUi::row_at_y(&cfg, 6), Some(ids[0]));
+        assert_eq!(SettingsUi::row_at_y(&cfg, 1), None);
         let mut ui = SettingsUi::default();
-        assert_eq!(ui.band_at(&cfg, 8, 65), Some(ids[0]));
-        assert_eq!(ui.band_at(&cfg, 1, 65), None);
-        assert_eq!(ui.band_at(&cfg, 65, 65), None);
         let mut changed = 0;
-        let y = (0..65)
-            .find(|&yy| ui.band_at(&cfg, yy, 65) == Some(S_FPS))
+        let y = (6..40)
+            .find(|&yy| SettingsUi::row_at_y(&cfg, yy) == Some(S_FPS))
             .unwrap();
         let before = cfg.framerate;
-        ui.click(&mut cfg, y, 10, 65, 126, &mut changed);
+        ui.click(&mut cfg, y, 4, 40, &mut changed);
         assert_eq!(ui.sel, S_FPS);
         assert_eq!(cfg.framerate, before - 5);
         assert_eq!(changed & CH_LAYOUT, CH_LAYOUT);
-        ui.click(&mut cfg, y, 110, 65, 126, &mut changed);
+        ui.click(&mut cfg, y, 39, 40, &mut changed);
         assert_eq!(cfg.framerate, before);
-        ui.click(&mut cfg, y, 200, 65, 126, &mut changed);
+        ui.click(&mut cfg, y, 99, 40, &mut changed);
         assert_eq!(ui.sel, S_FPS);
-    }
-
-    #[test]
-    fn scroll_window_follows_the_selection() {
-        let mut cfg = Config::default();
-        cfg.mode = "bars".to_string();
-        let mut ui = SettingsUi::default();
-        ui.sel = S_RESET;
-        ui.scroll_to_sel(&cfg, 65);
-        assert!(ui.offset > 0);
-        let ids = ui.window_ids(&cfg, 65);
-        assert_eq!(ids.len(), 7);
-        assert!(ids.contains(&S_RESET));
-        assert_eq!(ui.band_at(&cfg, 8 + 6 * 8, 65), ids.last().copied());
     }
 
     #[test]
