@@ -399,7 +399,8 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
     let mut cur_text = String::new();
     let flush = |start: &mut Option<f64>, text: &mut String, out: &mut Vec<LyricLine>| {
         if let Some(t) = start.take() {
-            let (pairs, saw) = split_inline_times(text.trim(), t);
+            let decoded = decode_entities(text.trim());
+            let (pairs, saw) = split_inline_times(&decoded, t);
             if pairs.is_empty() {
                 text.clear();
                 return;
@@ -449,6 +450,60 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
         }
     }
     flush(&mut cur_start, &mut cur_text, &mut out);
+    out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+pub(crate) fn parse_json3(text: &str) -> Vec<LyricLine> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let Some(events) = v.get("events").and_then(|e| e.as_array()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for event in events {
+        let Some(segs) = event.get("segs").and_then(|s| s.as_array()) else {
+            continue;
+        };
+        let start = event.get("tStartMs").and_then(|t| t.as_f64()).unwrap_or(0.0) / 1000.0;
+        let mut line = String::new();
+        let mut words = Vec::new();
+        let has_offsets = segs.iter().any(|s| {
+            s.get("tOffsetMs")
+                .and_then(|t| t.as_f64())
+                .is_some_and(|t| t > 0.0)
+        });
+        for seg in segs {
+            let Some(part) = seg.get("utf8").and_then(|s| s.as_str()) else {
+                continue;
+            };
+            if part.trim().is_empty() {
+                continue;
+            }
+            line.push_str(part);
+            if has_offsets {
+                let offset = seg.get("tOffsetMs").and_then(|t| t.as_f64()).unwrap_or(0.0);
+                let t = start + offset / 1000.0;
+                for word in part.split_whitespace() {
+                    words.push(LyricWord {
+                        t,
+                        text: word.to_string(),
+                    });
+                }
+            }
+        }
+        let display = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        let display = display.trim_matches('♪').trim();
+        if display.is_empty() {
+            continue;
+        }
+        out.push(LyricLine {
+            t: start,
+            text: display.to_string(),
+            words,
+        });
+    }
     out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
     out
 }
@@ -944,7 +999,7 @@ fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> 
         "--sub-langs",
         "en*",
         "--sub-format",
-        "vtt/best",
+        "json3/vtt/best",
         "-o",
         &out_tpl,
     ];
@@ -954,23 +1009,40 @@ fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> 
     }
     args.push(target);
     let _ = cmd_out("yt-dlp", &args, 90000);
-    let mut best = Vec::new();
+    let mut best_json = Vec::new();
+    let mut best_vtt = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&stem) && name.ends_with(".vtt") {
-                let p = format!("{}/{}", dir, name);
-                if let Ok(text) = std::fs::read_to_string(&p) {
+            if !name.starts_with(&stem) {
+                continue;
+            }
+            let is_json = name.ends_with(".json3");
+            if !is_json && !name.ends_with(".vtt") {
+                continue;
+            }
+            let p = format!("{}/{}", dir, name);
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                if is_json {
+                    let lines = parse_json3(&text);
+                    if lines.len() > best_json.len() {
+                        best_json = lines;
+                    }
+                } else {
                     let lines = dedup_rolling(parse_vtt(&text));
-                    if lines.len() > best.len() {
-                        best = lines;
+                    if lines.len() > best_vtt.len() {
+                        best_vtt = lines;
                     }
                 }
-                let _ = std::fs::remove_file(&p);
             }
+            let _ = std::fs::remove_file(&p);
         }
     }
-    best
+    if best_json.is_empty() {
+        best_vtt
+    } else {
+        best_json
+    }
 }
 
 #[derive(Clone, Default)]
@@ -980,6 +1052,7 @@ pub struct FetchOpts {
     pub prefer_word_synced: bool,
     pub lyrio_url: String,
     pub lyrio_key: String,
+    pub video_id: String,
 }
 
 pub(crate) const AUTO_PROVIDERS: [&str; 7] = [
@@ -1081,39 +1154,86 @@ fn quality_bonus(lines: &[LyricLine], duration: f64) -> i64 {
     s
 }
 
-fn fetch_auto(artist: &str, title: &str, duration: f64, opts: &FetchOpts) -> (Vec<LyricLine>, bool) {
+fn consider_candidate(
+    prefer_word: bool,
+    idx: usize,
+    lines: Vec<LyricLine>,
+    plain: bool,
+    duration: f64,
+    best: &mut Option<(usize, Vec<LyricLine>, u8)>,
+) {
+    if !usable_lines(&lines, duration) {
+        return;
+    }
+    let timing = if plain { 0 } else { timing_kind(&lines) };
+    let take = match best.as_ref() {
+        None => true,
+        Some((best_idx, _, best_timing)) => {
+            better_candidate(prefer_word, idx, timing, Some((*best_idx, *best_timing)))
+        }
+    };
+    if take {
+        *best = Some((idx, lines, timing));
+    }
+}
+
+fn fetch_auto(
+    artist: &str,
+    title: &str,
+    duration: f64,
+    opts: &FetchOpts,
+    url: &str,
+    art_url: &str,
+    cache_path: &str,
+) -> (Vec<LyricLine>, bool) {
     let mut contacted = false;
     let preferred = if opts.prefer_word_synced { 2 } else { 1 };
     let mut best: Option<(usize, Vec<LyricLine>, u8)> = None;
     for (idx, name) in AUTO_PROVIDERS.iter().enumerate() {
         let out = crate::providers::fetch_provider(name, artist, title, duration, opts);
         contacted |= out.contacted;
-        let Some(lines) = out.lines else {
-            continue;
-        };
-        if !usable_lines(&lines, duration) {
-            continue;
-        }
-        let timing = if out.plain {
-            0
-        } else {
-            timing_kind(&lines)
-        };
-        let take = match best.as_ref() {
-            None => true,
-            Some((best_idx, _, best_timing)) => better_candidate(
+        if let Some(lines) = out.lines {
+            consider_candidate(
                 opts.prefer_word_synced,
                 idx,
-                timing,
-                Some((*best_idx, *best_timing)),
-            ),
-        };
-        if take {
-            best = Some((idx, lines, timing));
+                lines,
+                out.plain,
+                duration,
+                &mut best,
+            );
         }
         if best.as_ref().is_some_and(|(_, _, t)| *t >= preferred) {
             break;
         }
+    }
+    if best.as_ref().is_none_or(|(_, _, t)| *t < preferred) {
+        if let Some(id) = video_id_from(art_url).or_else(|| video_id_from(url)) {
+            contacted = true;
+            let subs = fetch_subs(
+                &format!("https://www.youtube.com/watch?v={}", id),
+                cache_path,
+            );
+            consider_candidate(
+                opts.prefer_word_synced,
+                AUTO_PROVIDERS.len(),
+                subs,
+                false,
+                duration,
+                &mut best,
+            );
+        }
+    }
+    if best.is_none() && !artist.trim().is_empty() && !title.trim().is_empty() {
+        contacted = true;
+        let subs = fetch_search_subs(artist, title, duration, cache_path);
+        consider_candidate(
+            opts.prefer_word_synced,
+            AUTO_PROVIDERS.len() + 1,
+            subs,
+            false,
+            duration,
+            &mut best,
+        );
     }
     match best {
         Some((_, lines, _)) => (lines, true),
@@ -1121,10 +1241,56 @@ fn fetch_auto(artist: &str, title: &str, duration: f64, opts: &FetchOpts) -> (Ve
     }
 }
 
+fn valid_video_id(id: &str) -> Option<String> {
+    let id = id.trim();
+    if id.len() == 11 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        Some(id.to_string())
+    } else {
+        None
+    }
+}
+
+pub(crate) fn video_id_from(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    if let Some(pos) = url.find("/vi/") {
+        let rest = &url[pos + 4..];
+        if let Some(id) = rest.split('/').next() {
+            if let Some(id) = valid_video_id(id) {
+                return Some(id);
+            }
+        }
+    }
+    if let Some(pos) = url.find("youtu.be/") {
+        let rest = &url[pos + 9..];
+        if let Some(id) = rest.split(['?', '&', '/']).next() {
+            if let Some(id) = valid_video_id(id) {
+                return Some(id);
+            }
+        }
+    }
+    if url.contains("youtube.com/") {
+        for key in ["v=", "/embed/", "/shorts/"] {
+            if let Some(pos) = url.find(key) {
+                let rest = &url[pos + key.len()..];
+                if let Some(id) = rest.split(['?', '&', '/']).next() {
+                    if let Some(id) = valid_video_id(id) {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn fetch_lyrics(
     artist: &str,
     title: &str,
     url: &str,
+    art_url: &str,
     duration: f64,
     cache_path: &str,
     opts: &FetchOpts,
@@ -1137,7 +1303,7 @@ fn fetch_lyrics(
         }
     }
     if opts.provider == "auto" {
-        return fetch_auto(artist, title, duration, opts);
+        return fetch_auto(artist, title, duration, opts, url, art_url, cache_path);
     }
     let mut contacted = false;
     for name in provider_order(&opts.provider) {
@@ -1355,7 +1521,7 @@ impl LyricWorker {
         self.update_meta(track, opts);
         if track.present {
             self.last_pos = track.position;
-            if self.pos_cur.0 == 0.0 && track.position > 0.0 {
+            if track.position != self.pos_cur.0 {
                 self.update_pos(track.position);
             }
         }
@@ -1477,6 +1643,7 @@ impl LyricWorker {
         }
         self.last_attempt = Some(Instant::now());
         let url = track.url.clone();
+        let art_url = track.art_url.clone();
         let duration = track.duration;
         let opts = opts.clone();
         let dpath = dead_path(&path);
@@ -1484,7 +1651,8 @@ impl LyricWorker {
         self.rx = Some(rx);
         let ckey = self.cache_key.clone();
         std::thread::spawn(move || {
-            let (lines, contacted) = fetch_lyrics(&artist, &title, &url, duration, &path, &opts);
+            let (lines, contacted) =
+                fetch_lyrics(&artist, &title, &url, &art_url, duration, &path, &opts);
             if !lines.is_empty() {
                 if let Some(parent) = std::path::Path::new(&path).parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -2079,6 +2247,81 @@ mod port_tests {
     fn sanitiser_strips_brackets() {
         assert_eq!(sanitize_query("More & More (Sped Up) [Official Video]"), "More & More");
         assert_eq!(sanitize_query("  Coldplay  "), "Coldplay");
+    }
+
+    #[test]
+    fn json3_captions_keep_word_offsets() {
+        let body = r#"{"events":[
+            {"tStartMs":1000,"dDurationMs":500,"aAppend":1,"segs":[{"utf8":"\n"}]},
+            {"tStartMs":2000,"dDurationMs":3000,"segs":[
+                {"utf8":"hello"},
+                {"utf8":" world","tOffsetMs":500}
+            ]},
+            {"tStartMs":5000,"dDurationMs":1000,"segs":[{"utf8":"♪"}]}
+        ]}"#;
+        let lines = super::parse_json3(body);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "hello world");
+        assert_eq!(lines[0].words.len(), 2);
+        assert!((lines[0].t - 2.0).abs() < 1e-6);
+        assert!((lines[0].words[1].t - 2.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn video_ids_come_from_mpris_urls() {
+        assert_eq!(
+            super::video_id_from("https://i.ytimg.com/vi/QwxauuaX3SA/mqdefault.jpg"),
+            Some("QwxauuaX3SA".to_string())
+        );
+        assert_eq!(
+            super::video_id_from("https://www.youtube.com/watch?v=yKNxeF4KMsY&t=10"),
+            Some("yKNxeF4KMsY".to_string())
+        );
+        assert_eq!(
+            super::video_id_from("https://youtu.be/yKNxeF4KMsY?si=x"),
+            Some("yKNxeF4KMsY".to_string())
+        );
+        assert_eq!(super::video_id_from("https://example.com/cover.jpg"), None);
+    }
+
+    #[test]
+    fn update_follows_playback_samples() {
+        let opts = FetchOpts {
+            provider: "auto".to_string(),
+            prefer_word_synced: true,
+            ..Default::default()
+        };
+        let mut w = super::LyricWorker::new();
+        w.key = "a|b".to_string();
+        w.cache_key = "auto|word||a|b".to_string();
+        w.lines = vec![
+            line(10.0, "one"),
+            LyricLine {
+                t: 20.0,
+                text: "two three".to_string(),
+                words: vec![
+                    super::LyricWord { t: 20.0, text: "two".to_string() },
+                    super::LyricWord { t: 21.0, text: "three".to_string() },
+                ],
+            },
+        ];
+        let mut track = Track {
+            present: true,
+            player: String::new(),
+            artist: "a".to_string(),
+            title: "b".to_string(),
+            position: 10.0,
+            duration: 30.0,
+            art_url: String::new(),
+            url: String::new(),
+        };
+        w.update(&track, &opts);
+        assert_eq!(w.display_lines(&track), vec![("one".to_string(), true)]);
+        track.position = 21.5;
+        w.update(&track, &opts);
+        let row = w.display_rows(&track, false).remove(0);
+        assert_eq!(row.text, "two three");
+        assert_eq!(row.hot_start, 4);
     }
 
     #[test]

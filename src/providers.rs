@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::crypto::{base64_decode, hex_lower, hmac_sha256};
 use crate::lyrics::{
-    distribute_plain, normalize_name, parse_lrc, parse_ttml, url_encode, FetchOpts, LyricLine,
-    LyricWord,
+    distribute_plain, normalize_name, parse_lrc, parse_ttml, sanitize_query, url_encode, FetchOpts,
+    LyricLine, LyricWord,
 };
 use crate::mpris::cmd_out;
 
@@ -383,6 +383,21 @@ fn fetch_betterlyrics(artist: &str, title: &str, duration: f64) -> ProviderOutco
 }
 
 fn fetch_lrcred(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
+    let first = lrcred_lookup(artist, title, duration);
+    if first.lines.is_some() {
+        return first;
+    }
+    let clean = sanitize_query(title);
+    if !clean.is_empty() && clean != title {
+        let retry = lrcred_lookup(artist, &clean, 0.0);
+        if retry.lines.is_some() {
+            return retry;
+        }
+    }
+    first
+}
+
+fn lrcred_lookup(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
     let url = format!(
         "https://lrc.red/api/v1?q={}",
         url_encode(format!("{} {}", title, artist).trim())
@@ -455,7 +470,40 @@ fn fetch_lrcred(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
     }
 }
 
-fn fetch_unison(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
+fn unison_request(url: &str, duration: f64) -> Option<(Vec<LyricLine>, bool)> {
+    let (status, body) = get(url, &[("Accept", "application/json")])?;
+    if !(200..300).contains(&status) {
+        return None;
+    }
+    let v = serde_json::from_str::<Value>(&body).ok()?;
+    if !v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
+        return None;
+    }
+    let data = v.get("data")?;
+    let lyrics = data.get("lyrics").and_then(|l| l.as_str())?;
+    let format = data.get("format").and_then(|f| f.as_str()).unwrap_or("");
+    let (lines, plain) = parse_any(format, lyrics, duration);
+    if lines.is_empty() {
+        None
+    } else {
+        Some((lines, plain))
+    }
+}
+
+fn fetch_unison(artist: &str, title: &str, duration: f64, video_id: &str) -> ProviderOutcome {
+    if !video_id.trim().is_empty() {
+        let url = format!(
+            "https://unison.boidu.dev/lyrics?v={}",
+            url_encode(video_id.trim())
+        );
+        if let Some((lines, plain)) = unison_request(&url, duration) {
+            return ProviderOutcome {
+                lines: Some(lines),
+                contacted: true,
+                plain,
+            };
+        }
+    }
     let mut url = format!(
         "https://unison.boidu.dev/lyrics?song={}",
         url_encode(title)
@@ -466,34 +514,32 @@ fn fetch_unison(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
     if duration > 0.0 {
         url.push_str(&format!("&duration={}", duration as i64));
     }
-    let Some((status, body)) = get(&url, &[("Accept", "application/json")]) else {
-        return none(false);
-    };
-    if !(200..300).contains(&status) {
-        return none(true);
-    }
-    let Ok(v) = serde_json::from_str::<Value>(&body) else {
-        return none(true);
-    };
-    if !v.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
-        return none(true);
-    }
-    let Some(data) = v.get("data") else {
-        return none(true);
-    };
-    let Some(lyrics) = data.get("lyrics").and_then(|l| l.as_str()) else {
-        return none(true);
-    };
-    let format = data.get("format").and_then(|f| f.as_str()).unwrap_or("");
-    let (lines, plain) = parse_any(format, lyrics, duration);
-    ProviderOutcome {
-        lines: if lines.is_empty() { None } else { Some(lines) },
-        contacted: true,
-        plain,
+    match unison_request(&url, duration) {
+        Some((lines, plain)) => ProviderOutcome {
+            lines: Some(lines),
+            contacted: true,
+            plain,
+        },
+        None => none(true),
     }
 }
 
 fn fetch_lrclib(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
+    let first = lrclib_lookup(artist, title, duration);
+    if first.lines.is_some() {
+        return first;
+    }
+    let clean = sanitize_query(title);
+    if !clean.is_empty() && clean != title {
+        let retry = lrclib_lookup(artist, &clean, 0.0);
+        if retry.lines.is_some() {
+            return retry;
+        }
+    }
+    first
+}
+
+fn lrclib_lookup(artist: &str, title: &str, duration: f64) -> ProviderOutcome {
     let mut url = format!(
         "https://lrclib.net/api/search?track_name={}",
         url_encode(title)
@@ -982,7 +1028,7 @@ pub(crate) fn fetch_provider(
         "lyrio" => fetch_lyrio(artist, title, duration, opts),
         "betterlyrics" => fetch_betterlyrics(artist, title, duration),
         "lrcred" => fetch_lrcred(artist, title, duration),
-        "unison" => fetch_unison(artist, title, duration),
+        "unison" => fetch_unison(artist, title, duration, &opts.video_id),
         "lrclib" => fetch_lrclib(artist, title, duration),
         "kugou" => fetch_kugou(artist, title, duration),
         "paxsenix" => fetch_paxsenix(artist, title, duration),

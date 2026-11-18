@@ -1152,6 +1152,9 @@ fn main() {
                         prefer_word_synced: cfg.prefer_word_synced,
                         lyrio_url: cfg.lyrio_url.clone(),
                         lyrio_key: cfg.lyrio_key.clone(),
+                        video_id: crate::lyrics::video_id_from(&track.art_url)
+                            .or_else(|| crate::lyrics::video_id_from(&track.url))
+                            .unwrap_or_default(),
                     },
                 );
             }
