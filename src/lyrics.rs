@@ -103,7 +103,6 @@ struct SearchHit {
     artist: String,
     title: String,
     duration: f64,
-    synced: Option<String>,
     plain: Option<String>,
 }
 
@@ -124,9 +123,8 @@ fn parse_search_hits(body: &str) -> Vec<SearchHit> {
             .and_then(|s| s.split([',', '}']).next())
             .and_then(|s| s.trim().parse::<f64>().ok())
             .unwrap_or(0.0);
-        let synced = json_string(chunk, "syncedLyrics").filter(|s| !s.trim().is_empty());
         let plain = json_string(chunk, "plainLyrics").filter(|s| !s.trim().is_empty());
-        out.push(SearchHit { artist, title, duration, synced, plain });
+        out.push(SearchHit { artist, title, duration, plain });
     }
     out
 }
@@ -159,25 +157,6 @@ fn lrclib_search_hits(artist: &str, title: &str) -> Vec<SearchHit> {
         None => return Vec::new(),
     };
     parse_search_hits(&body)
-}
-
-fn best_synced(hits: &[SearchHit], q_artist: &str, q_title: &str, q_dur: f64) -> Option<Vec<LyricLine>> {
-    let mut best: Option<((usize, u64, usize), &SearchHit)> = None;
-    for hit in hits {
-        if hit.synced.is_none() {
-            continue;
-        }
-        let score = score_hit(q_artist, q_title, q_dur, hit);
-        if best.as_ref().is_none_or(|(s, _)| score < *s) {
-            best = Some((score, hit));
-        }
-    }
-    let (_, hit) = best?;
-    let lines = parse_lrc(hit.synced.as_ref()?);
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines)
 }
 
 fn best_plain(hits: &[SearchHit], q_artist: &str, q_title: &str, q_dur: f64) -> Option<Vec<LyricLine>> {
@@ -336,7 +315,7 @@ pub(crate) fn parse_lrc(text: &str) -> Vec<LyricLine> {
             let words = if saw {
                 pairs
                     .into_iter()
-                    .map(|(wt, w)| LyricWord { t: wt, text: w })
+                    .map(|(wt, w)| LyricWord { t: wt + offset, text: w })
                     .collect()
             } else {
                 Vec::new()
@@ -348,7 +327,7 @@ pub(crate) fn parse_lrc(text: &str) -> Vec<LyricLine> {
     out
 }
 
-fn parse_vtt_time(s: &str) -> Option<f64> {
+pub(crate) fn parse_vtt_time(s: &str) -> Option<f64> {
     let s = s.trim();
     let mut parts = s.split(':');
     let mut secs = 0.0;
@@ -474,7 +453,261 @@ pub(crate) fn parse_vtt(text: &str) -> Vec<LyricLine> {
     out
 }
 
-fn normalize_name(s: &str) -> String {
+fn xml_tag_end(s: &str, from: usize) -> Option<usize> {
+    let mut quote = 0u8;
+    for (off, c) in s[from..].char_indices() {
+        let b = c as u32;
+        if quote == 0 {
+            if c == '"' || c == '\'' {
+                quote = b as u8;
+            } else if c == '>' {
+                return Some(from + off);
+            }
+        } else if b as u8 == quote {
+            quote = 0;
+        }
+    }
+    None
+}
+
+fn xml_attr<'a>(tag: &'a str, want: &str) -> Option<&'a str> {
+    let mut rest = tag;
+    loop {
+        let eq = rest.find('=')?;
+        let before = &rest[..eq];
+        let name = before.split_whitespace().last()?.trim_start_matches('<');
+        let after = rest[eq + 1..].trim_start();
+        let (val, used) = if let Some(a) = after.strip_prefix('"') {
+            let end = a.find('"')?;
+            (&a[..end], end + 2)
+        } else if let Some(a) = after.strip_prefix('\'') {
+            let end = a.find('\'')?;
+            (&a[..end], end + 2)
+        } else {
+            let end = after
+                .find(|c: char| c.is_whitespace() || c == '>')
+                .unwrap_or(after.len());
+            (&after[..end], end)
+        };
+        let local = name.rsplit(':').next().unwrap_or(name);
+        if local == want {
+            return Some(val);
+        }
+        if used == 0 {
+            return None;
+        }
+        rest = &after[used..];
+    }
+}
+
+fn find_xml_open(s: &str, from: usize, name: &str) -> Option<(usize, usize, usize)> {
+    let pat = format!("<{}", name);
+    let mut i = from;
+    while let Some(rel) = s[i..].find(&pat) {
+        let start = i + rel;
+        let attrs = start + pat.len();
+        let next = s[attrs..].chars().next();
+        if next.is_some_and(|c| c.is_whitespace() || c == '>') {
+            let end = xml_tag_end(s, start)?;
+            return Some((start, attrs, end));
+        }
+        i = attrs;
+    }
+    None
+}
+
+fn xml_element_inner<'a>(s: &'a str, from: usize, name: &str) -> Option<(&'a str, usize)> {
+    let close = format!("</{}>", name);
+    let mut depth = 1u32;
+    let mut i = from;
+    while i < s.len() {
+        let open = find_xml_open(s, i, name);
+        let closed = s[i..].find(&close).map(|r| i + r);
+        match (open, closed) {
+            (Some((st, _, end)), Some(c)) if st < c => {
+                if !s[st..=end].trim_end().ends_with("/>") {
+                    depth += 1;
+                }
+                i = end + 1;
+            }
+            (_, Some(c)) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[from..c], c + close.len()));
+                }
+                i = c + close.len();
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(idx) = rest.find('&') {
+        out.push_str(&rest[..idx]);
+        rest = &rest[idx..];
+        let Some(end) = rest.find(';') else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let ent = &rest[1..end];
+        let ch = match ent {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some(' '),
+            _ => ent
+                .strip_prefix("#x")
+                .or_else(|| ent.strip_prefix("#X"))
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+                .or_else(|| ent.strip_prefix('#').and_then(|d| d.parse().ok()))
+                .and_then(char::from_u32),
+        };
+        match ch {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn clean_inline_text(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn walk_ttml_inline(s: &str, text: &mut String, words: &mut Vec<LyricWord>) {
+    let mut i = 0;
+    while i < s.len() {
+        let Some(rel) = s[i..].find('<') else {
+            text.push_str(&decode_entities(&s[i..]));
+            break;
+        };
+        let start = i + rel;
+        if start > i {
+            text.push_str(&decode_entities(&s[i..start]));
+        }
+        let Some(end) = xml_tag_end(s, start) else {
+            text.push_str(&decode_entities(&s[start..]));
+            break;
+        };
+        let tag = &s[start + 1..end];
+        let name = tag
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        if name == "br" {
+            text.push(' ');
+            i = end + 1;
+            continue;
+        }
+        if name != "span" {
+            i = end + 1;
+            continue;
+        }
+        let Some((inner, after)) = xml_element_inner(s, end + 1, "span") else {
+            i = end + 1;
+            continue;
+        };
+        let role = xml_attr(tag, "role").unwrap_or("");
+        if role == "x-bg" || role == "x-translation" || role == "x-roman" {
+            i = after;
+            continue;
+        }
+        let mut inner_text = String::new();
+        let mut inner_words = Vec::new();
+        walk_ttml_inline(inner, &mut inner_text, &mut inner_words);
+        text.push_str(&inner_text);
+        words.extend(inner_words);
+        let begin = xml_attr(tag, "begin").and_then(ttml_time);
+        let word = clean_inline_text(&inner_text);
+        if let (Some(t), false) = (begin, word.is_empty()) {
+            words.push(LyricWord { t, text: word });
+        }
+        i = after;
+    }
+}
+
+fn ttml_time(s: &str) -> Option<f64> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if let Some(v) = parse_vtt_time(t) {
+        return Some(v);
+    }
+    if let Some(v) = t.strip_suffix("ms") {
+        return v.trim().parse::<f64>().ok().map(|n| n / 1000.0);
+    }
+    if let Some(v) = t.strip_suffix('h') {
+        return v.trim().parse::<f64>().ok().map(|n| n * 3600.0);
+    }
+    if let Some(v) = t.strip_suffix('m') {
+        return v.trim().parse::<f64>().ok().map(|n| n * 60.0);
+    }
+    if let Some(v) = t.strip_suffix('s') {
+        return v.trim().parse::<f64>().ok();
+    }
+    t.parse::<f64>().ok()
+}
+
+pub(crate) fn parse_ttml(text: &str) -> Vec<LyricLine> {
+    let mut out = Vec::new();
+    let mut search = 0;
+    while let Some((start, attrs, end)) = find_xml_open(text, search, "p") {
+        let tag = &text[attrs..end];
+        let body_start = end + 1;
+        let Some((body, after)) = xml_element_inner(text, body_start, "p") else {
+            search = end + 1;
+            continue;
+        };
+        search = after;
+        if xml_attr(tag, "role") == Some("x-bg") {
+            continue;
+        }
+        let mut line_text = String::new();
+        let mut words = Vec::new();
+        walk_ttml_inline(body, &mut line_text, &mut words);
+        let display = clean_inline_text(&line_text);
+        let display = if display.is_empty() && !words.is_empty() {
+            words
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            display
+        };
+        if display.is_empty() {
+            continue;
+        }
+        let begin = xml_attr(tag, "begin")
+            .and_then(ttml_time)
+            .or_else(|| words.first().map(|w| w.t));
+        let Some(t) = begin else {
+            let _ = start;
+            continue;
+        };
+        out.push(LyricLine { t, text: display, words });
+    }
+    out.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+pub(crate) fn normalize_name(s: &str) -> String {
     canonicalize(&s.to_ascii_lowercase())
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
@@ -744,12 +977,69 @@ fn download_subs(target: &str, cache_path: &str, match_filter: Option<&str>) -> 
 pub struct FetchOpts {
     pub local_folder: String,
     pub provider: String,
+    pub prefer_word_synced: bool,
+    pub lyrio_url: String,
+    pub lyrio_key: String,
 }
 
-fn provider_order(pref: &str) -> [&str; 2] {
+pub(crate) const AUTO_PROVIDERS: [&str; 7] = [
+    "lyrio",
+    "betterlyrics",
+    "lrcred",
+    "unison",
+    "lrclib",
+    "kugou",
+    "paxsenix",
+];
+
+pub(crate) fn timing_kind(lines: &[LyricLine]) -> u8 {
+    if lines.iter().any(|l| !l.words.is_empty()) {
+        2
+    } else if lines.iter().any(|l| l.t > 0.0) {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) fn usable_lines(lines: &[LyricLine], duration: f64) -> bool {
+    lines.iter().any(|l| !l.text.trim().is_empty()) && quality_bonus(lines, duration) > -10000
+}
+
+fn better_candidate(
+    prefer_word: bool,
+    cand_idx: usize,
+    cand_timing: u8,
+    best: Option<(usize, u8)>,
+) -> bool {
+    let Some((best_idx, best_timing)) = best else {
+        return true;
+    };
+    if prefer_word && cand_timing != best_timing {
+        return cand_timing > best_timing;
+    }
+    let cand_synced = cand_timing > 0;
+    let best_synced = best_timing > 0;
+    if cand_synced != best_synced {
+        return cand_synced;
+    }
+    if cand_idx != best_idx {
+        return cand_idx < best_idx;
+    }
+    cand_timing > best_timing
+}
+
+fn provider_order(pref: &str) -> Vec<&'static str> {
     match pref {
-        "musixmatch" => ["musixmatch", "lrclib"],
-        _ => ["lrclib", "musixmatch"],
+        "musixmatch" => vec!["musixmatch"],
+        "lyrio" => vec!["lyrio"],
+        "betterlyrics" => vec!["betterlyrics"],
+        "lrcred" => vec!["lrcred"],
+        "unison" => vec!["unison"],
+        "lrclib" => vec!["lrclib"],
+        "kugou" => vec!["kugou"],
+        "paxsenix" => vec!["paxsenix"],
+        _ => AUTO_PROVIDERS.to_vec(),
     }
 }
 
@@ -791,43 +1081,44 @@ fn quality_bonus(lines: &[LyricLine], duration: f64) -> i64 {
     s
 }
 
-fn fetch_auto(artist: &str, title: &str, duration: f64) -> (Vec<LyricLine>, bool) {
+fn fetch_auto(artist: &str, title: &str, duration: f64, opts: &FetchOpts) -> (Vec<LyricLine>, bool) {
     let mut contacted = false;
-    let exact = match fetch_synced(artist, title) {
-        Some(lines) => {
-            contacted = true;
-            lines
-        }
-        None => Vec::new(),
-    };
-    if !exact.is_empty() && 100 + quality_bonus(&exact, duration) >= 160 {
-        return (exact, true);
-    }
-    let mut best_score = if exact.is_empty() {
-        -10000i64
-    } else {
-        100 + quality_bonus(&exact, duration)
-    };
-    let mut best = exact;
-    let cands: Vec<(i64, Option<Vec<LyricLine>>)> = vec![
-        (90, crate::musixmatch::fetch_musixmatch(artist, title, duration)),
-        (60, fetch_search_synced(artist, title, duration)),
-    ];
-    for (base, hit) in cands {
-        let Some(lines) = hit else {
+    let preferred = if opts.prefer_word_synced { 2 } else { 1 };
+    let mut best: Option<(usize, Vec<LyricLine>, u8)> = None;
+    for (idx, name) in AUTO_PROVIDERS.iter().enumerate() {
+        let out = crate::providers::fetch_provider(name, artist, title, duration, opts);
+        contacted |= out.contacted;
+        let Some(lines) = out.lines else {
             continue;
         };
-        contacted = true;
-        if lines.is_empty() {
+        if !usable_lines(&lines, duration) {
             continue;
         }
-        let s = base + quality_bonus(&lines, duration);
-        if s > best_score {
-            best_score = s;
-            best = lines;
+        let timing = if out.plain {
+            0
+        } else {
+            timing_kind(&lines)
+        };
+        let take = match best.as_ref() {
+            None => true,
+            Some((best_idx, _, best_timing)) => better_candidate(
+                opts.prefer_word_synced,
+                idx,
+                timing,
+                Some((*best_idx, *best_timing)),
+            ),
+        };
+        if take {
+            best = Some((idx, lines, timing));
+        }
+        if best.as_ref().is_some_and(|(_, _, t)| *t >= preferred) {
+            break;
         }
     }
-    (best, contacted)
+    match best {
+        Some((_, lines, _)) => (lines, true),
+        None => (Vec::new(), contacted),
+    }
 }
 
 fn fetch_lyrics(
@@ -845,32 +1136,24 @@ fn fetch_lyrics(
             }
         }
     }
-    let mut contacted = false;
     if opts.provider == "auto" {
-        let (lines, ok) = fetch_auto(artist, title, duration);
-        if !lines.is_empty() {
-            return (lines, true);
-        }
-        contacted = ok;
-    } else {
-        for name in provider_order(&opts.provider) {
-            let hit = match name {
-                "musixmatch" => crate::musixmatch::fetch_musixmatch(artist, title, duration),
-                _ => {
-                    let synced = fetch_synced(artist, title).unwrap_or_default();
-                    if !synced.is_empty() {
-                        return (synced, true);
-                    }
-                    fetch_search_synced(artist, title, duration)
-                }
-            };
-            if hit.is_some() {
-                contacted = true;
+        return fetch_auto(artist, title, duration, opts);
+    }
+    let mut contacted = false;
+    for name in provider_order(&opts.provider) {
+        let hit = if name == "musixmatch" {
+            crate::providers::ProviderOutcome {
+                lines: crate::musixmatch::fetch_musixmatch(artist, title, duration),
+                contacted: true,
+                plain: false,
             }
-            if let Some(lines) = hit {
-                if !lines.is_empty() {
-                    return (lines, true);
-                }
+        } else {
+            crate::providers::fetch_provider(name, artist, title, duration, opts)
+        };
+        contacted |= hit.contacted;
+        if let Some(lines) = hit.lines {
+            if !lines.is_empty() {
+                return (lines, true);
             }
         }
     }
@@ -894,12 +1177,7 @@ fn fetch_lyrics(
     (Vec::new(), contacted)
 }
 
-fn fetch_search_synced(artist: &str, title: &str, duration: f64) -> Option<Vec<LyricLine>> {
-    let hits = lrclib_search_hits(artist, title);
-    best_synced(&hits, artist, title, duration)
-}
-
-fn distribute_plain(texts: Vec<String>, duration: f64) -> Option<Vec<LyricLine>> {
+pub(crate) fn distribute_plain(texts: Vec<String>, duration: f64) -> Option<Vec<LyricLine>> {
     let texts: Vec<String> = texts.into_iter().filter(|l| !l.is_empty()).collect();
     if texts.len() < 2 || duration < 30.0 {
         return None;
@@ -921,25 +1199,56 @@ fn fetch_search_plain(artist: &str, title: &str, duration: f64) -> Option<Vec<Ly
     best_plain(&hits, artist, title, duration)
 }
 
-fn fetch_synced(artist: &str, title: &str) -> Option<Vec<LyricLine>> {
-    let url = format!(
-        "https://lrclib.net/api/get?artist_name={}&track_name={}",
-        url_encode(artist),
-        url_encode(title)
-    );
-    let body = cmd_out("curl", &["-fsSL", "-m", "15", &url], 20000)?;
-    if body.contains("\"instrumental\":true") {
-        return Some(Vec::new());
+#[derive(Clone)]
+pub struct LyricRow {
+    pub text: String,
+    pub current: bool,
+    pub lit: usize,
+    pub hot_start: usize,
+    pub hot_end: usize,
+}
+
+impl LyricRow {
+    fn plain(text: &str, current: bool) -> LyricRow {
+        LyricRow {
+            text: text.to_string(),
+            current,
+            lit: 0,
+            hot_start: usize::MAX,
+            hot_end: usize::MAX,
+        }
     }
-    let synced = json_string(&body, "syncedLyrics")?;
-    if synced.trim().is_empty() {
-        return Some(Vec::new());
+}
+
+fn word_ranges(line: &LyricLine) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = line.text.chars().collect();
+    let mut out = Vec::new();
+    let mut from = 0;
+    for w in &line.words {
+        let wt: Vec<char> = w.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+        if wt.is_empty() {
+            continue;
+        }
+        let mut found = None;
+        let mut s = from;
+        while s + wt.len() <= chars.len() {
+            if chars[s..s + wt.len()] == wt[..] {
+                found = Some(s);
+                break;
+            }
+            s += 1;
+        }
+        let start = found.unwrap_or(from);
+        let end = (start + wt.len()).min(chars.len());
+        out.push((start, end));
+        from = end;
     }
-    Some(parse_lrc(&synced))
+    out
 }
 
 pub struct LyricWorker {
     key: String,
+    cache_key: String,
     lines: Vec<LyricLine>,
     rx: Option<std::sync::mpsc::Receiver<(String, Vec<LyricLine>)>>,
     last_attempt: Option<Instant>,
@@ -959,6 +1268,7 @@ impl LyricWorker {
         let now = Instant::now();
         LyricWorker {
             key: String::new(),
+            cache_key: String::new(),
             lines: Vec::new(),
             rx: None,
             last_attempt: None,
@@ -1003,12 +1313,14 @@ impl LyricWorker {
         self.key = String::new();
     }
 
-    pub fn force_reload(&mut self) {        self.lines.clear();
+    pub fn force_reload(&mut self) {
+        self.lines.clear();
         self.rx = None;
         self.last_attempt = None;
         self.dead.remove(&self.key);
-        if !self.key.is_empty() {
-            if let Some(p) = cache_path(&self.key) {
+        self.dead.remove(&self.cache_key);
+        if !self.cache_key.is_empty() {
+            if let Some(p) = cache_path(&self.cache_key) {
                 let _ = std::fs::remove_file(&p);
                 let _ = std::fs::remove_file(dead_path(&p));
             }
@@ -1031,6 +1343,7 @@ impl LyricWorker {
 
     pub fn reset(&mut self) {
         self.key.clear();
+        self.cache_key.clear();
         self.lines.clear();
         self.rx = None;
         self.last_attempt = None;
@@ -1081,11 +1394,13 @@ impl LyricWorker {
             match rx.try_recv() {
                 Ok((k, lines)) => {
                     self.rx = None;
-                    if lines.is_empty() {
-                        self.dead.insert(k.clone());
-                    }
-                    if k == self.key {
+                    if k == self.cache_key {
+                        if lines.is_empty() {
+                            self.dead.insert(self.cache_key.clone());
+                        }
                         self.lines = lines;
+                    } else if lines.is_empty() {
+                        self.dead.insert(k);
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1110,11 +1425,22 @@ impl LyricWorker {
                 (tkey, track.artist.clone(), track.title.clone())
             }
         };
-        if key != self.key {
+        let cache_key = format!(
+            "{}|{}|{}|{}",
+            opts.provider,
+            if opts.prefer_word_synced { "word" } else { "line" },
+            opts.lyrio_url,
+            key
+        );
+        if key != self.key || cache_key != self.cache_key {
+            let changed_provider = !self.cache_key.is_empty() && cache_key != self.cache_key;
             self.key = key.clone();
+            self.cache_key = cache_key;
             self.lines.clear();
             self.rx = None;
-            self.last_attempt = None;
+            if changed_provider {
+                self.last_attempt = None;
+            }
         }
         if !self.lines.is_empty() || self.rx.is_some() {
             return;
@@ -1124,7 +1450,7 @@ impl LyricWorker {
                 return;
             }
         }
-        let Some(path) = cache_path(&key) else {
+        let Some(path) = cache_path(&self.cache_key) else {
             return;
         };
         if let Ok(text) = std::fs::read_to_string(&path) {
@@ -1139,12 +1465,12 @@ impl LyricWorker {
             }
         }
         if self.manual.is_none() {
-            if self.dead.contains(&key) {
+            if self.dead.contains(&key) || self.dead.contains(&self.cache_key) {
                 return;
             }
             let dpath = dead_path(&path);
             if dead_fresh(&dpath) {
-                self.dead.insert(key.clone());
+                self.dead.insert(self.cache_key.clone());
                 return;
             }
             let _ = std::fs::remove_file(&dpath);
@@ -1156,6 +1482,7 @@ impl LyricWorker {
         let dpath = dead_path(&path);
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
+        let ckey = self.cache_key.clone();
         std::thread::spawn(move || {
             let (lines, contacted) = fetch_lyrics(&artist, &title, &url, duration, &path, &opts);
             if !lines.is_empty() {
@@ -1166,7 +1493,7 @@ impl LyricWorker {
             } else if contacted {
                 mark_dead(&dpath);
             }
-            let _ = tx.send((key, lines));
+            let _ = tx.send((ckey, lines));
         });
     }
 
@@ -1180,26 +1507,25 @@ impl LyricWorker {
         self.live_position()
     }
 
+    #[cfg(test)]
     pub fn display_lines(&self, track: &Track) -> Vec<(String, bool)> {
-        if !track.present || self.lines.is_empty() {
-            return vec![("No Lyrics".to_string(), false)];
-        }
-        let pos = self.cur_pos(track);
-        let mut current: Option<String> = None;
-        for line in &self.lines {
-            if line.t <= pos && !line.text.trim().is_empty() {
-                current = Some(line.text.clone());
-            }
-        }
-        match current {
-            Some(w) => vec![(w, true)],
-            None => vec![(String::new(), true)],
-        }
+        self.display_rows(track, false)
+            .into_iter()
+            .map(|r| (r.text, r.current))
+            .collect()
     }
 
+    #[cfg(test)]
     pub fn display_context(&self, track: &Track) -> Vec<(String, bool)> {
+        self.display_rows(track, true)
+            .into_iter()
+            .map(|r| (r.text, r.current))
+            .collect()
+    }
+
+    pub fn display_rows(&self, track: &Track, context: bool) -> Vec<LyricRow> {
         if !track.present || self.lines.is_empty() {
-            return vec![("No Lyrics".to_string(), false)];
+            return vec![LyricRow::plain("No Lyrics", false)];
         }
         let pos = self.cur_pos(track);
         let mut idx: Option<usize> = None;
@@ -1208,6 +1534,12 @@ impl LyricWorker {
                 idx = Some(i);
             }
         }
+        if !context {
+            return match idx {
+                Some(c) => vec![self.row_at(c, pos, true)],
+                None => vec![LyricRow::plain("", true)],
+            };
+        }
         let mut out = Vec::new();
         match idx {
             Some(c) => {
@@ -1215,29 +1547,72 @@ impl LyricWorker {
                 while p > 0 {
                     p -= 1;
                     if !self.lines[p].text.trim().is_empty() {
-                        out.push((self.lines[p].text.clone(), false));
+                        out.push(self.row_at(p, pos, false));
                         break;
                     }
                 }
-                out.push((self.lines[c].text.clone(), true));
-                for line in self.lines.iter().skip(c + 1) {
+                out.push(self.row_at(c, pos, true));
+                for (i, line) in self.lines.iter().enumerate().skip(c + 1) {
                     if !line.text.trim().is_empty() {
-                        out.push((line.text.clone(), false));
+                        out.push(self.row_at(i, pos, false));
                         break;
                     }
                 }
             }
             None => {
-                out.push((String::new(), true));
-                for line in &self.lines {
+                out.push(LyricRow::plain("", true));
+                for (i, line) in self.lines.iter().enumerate() {
                     if !line.text.trim().is_empty() {
-                        out.push((line.text.clone(), false));
+                        out.push(self.row_at(i, pos, false));
                         break;
                     }
                 }
             }
         }
         out
+    }
+
+    fn row_at(&self, idx: usize, pos: f64, current: bool) -> LyricRow {
+        let line = &self.lines[idx];
+        let len = line.text.chars().count();
+        if !current {
+            return LyricRow::plain(&line.text, false);
+        }
+        if line.words.is_empty() {
+            return LyricRow {
+                text: line.text.clone(),
+                current: true,
+                lit: len,
+                hot_start: usize::MAX,
+                hot_end: usize::MAX,
+            };
+        }
+        let ranges = word_ranges(line);
+        let mut hot: Option<usize> = None;
+        for (i, w) in line.words.iter().enumerate() {
+            if w.t <= pos && !w.text.trim().is_empty() {
+                hot = Some(i);
+            }
+        }
+        match hot {
+            Some(k) => {
+                let (start, end) = ranges.get(k).copied().unwrap_or((len, len));
+                LyricRow {
+                    text: line.text.clone(),
+                    current: true,
+                    lit: start,
+                    hot_start: start,
+                    hot_end: end,
+                }
+            }
+            None => LyricRow {
+                text: line.text.clone(),
+                current: true,
+                lit: 0,
+                hot_start: usize::MAX,
+                hot_end: usize::MAX,
+            },
+        }
     }
 
     fn cur_pos(&self, track: &Track) -> f64 {
@@ -1356,6 +1731,7 @@ mod worker_tests {
         let now = Instant::now();
         LyricWorker {
             key: "a|b".to_string(),
+            cache_key: String::new(),
             lines,
             rx: None,
             last_attempt: None,
@@ -1404,6 +1780,29 @@ mod worker_tests {
         );
         w.update_pos(25.0);
         assert_eq!(w.display_lines(&track_at(25.0)), vec![("next line".to_string(), true)]);
+    }
+
+    #[test]
+    fn word_timed_rows_mark_progress() {
+        let mut w = worker_with(vec![LyricLine {
+            t: 10.0,
+            text: "one two three".to_string(),
+            words: vec![
+                super::LyricWord { t: 10.5, text: "one".to_string() },
+                super::LyricWord { t: 11.0, text: "two".to_string() },
+                super::LyricWord { t: 12.0, text: "three".to_string() },
+            ],
+        }]);
+        w.update_pos(11.2);
+        let rows = w.display_rows(&track_at(11.2), false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "one two three");
+        assert_eq!(rows[0].lit, 4);
+        assert_eq!((rows[0].hot_start, rows[0].hot_end), (4, 7));
+        w.update_pos(10.2);
+        let rows = w.display_rows(&track_at(10.2), false);
+        assert_eq!(rows[0].lit, 0);
+        assert_eq!(rows[0].hot_start, usize::MAX);
     }
 
     #[test]

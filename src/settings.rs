@@ -32,7 +32,8 @@ const S_OFFSET: usize = 19;
 const S_COLORS: usize = 20;
 const S_ALIGN: usize = 21;
 const S_WAVESM: usize = 22;
-const S_COUNT: usize = 23;
+const S_WORD: usize = 23;
+const S_COUNT: usize = 24;
 const S_RESET: usize = S_COUNT;
 const CONFIRM_TIMEOUT_MS: i64 = 5000;
 
@@ -60,6 +61,7 @@ const LABELS: [&str; S_COUNT] = [
     "colors",
     "align",
     "wave smooth",
+    "word sync",
 ];
 
 const RATES: [u32; 9] = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 96000, 192000];
@@ -288,7 +290,16 @@ impl SettingsUi {
                 }
             }
             S_PROVIDER => {
-                const ORDER: [&str; 3] = ["auto", "lrclib", "musixmatch"];
+                const ORDER: [&str; 8] = [
+                    "auto",
+                    "lyrio",
+                    "betterlyrics",
+                    "lrcred",
+                    "unison",
+                    "lrclib",
+                    "kugou",
+                    "paxsenix",
+                ];
                 let mut idx = 0;
                 for (i, name) in ORDER.iter().enumerate() {
                     if cfg.provider == *name {
@@ -325,6 +336,10 @@ impl SettingsUi {
                 cfg.text_align = if cfg.text_align == "left" { "center".to_string() } else { "left".to_string() };
                 *changed |= CH_LAYOUT;
             }
+            S_WORD => {
+                cfg.prefer_word_synced = !cfg.prefer_word_synced;
+                *changed |= CH_LAYOUT;
+            }
             _ => {}
         }
     }
@@ -356,7 +371,7 @@ impl SettingsUi {
             ]),
 
             "lyrics" | "text" => {
-                rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_ALIGN, S_PROVIDER, S_OFFSET])
+                rows.extend_from_slice(&[S_TEXTSIZE, S_STYLE, S_ALIGN, S_PROVIDER, S_WORD, S_OFFSET])
             }
             "wave" => rows.extend_from_slice(&[S_WAVESM]),
             _ => {}
@@ -576,6 +591,13 @@ fn format_value(cfg: &Config, id: usize) -> String {
         S_OFFSET => format!("{:+}ms", cfg.lyric_offset_ms),
         S_STYLE => cfg.text_style.clone(),
         S_ALIGN => cfg.text_align.clone(),
+        S_WORD => {
+            if cfg.prefer_word_synced {
+                "on".to_string()
+            } else {
+                "off".to_string()
+            }
+        }
         _ => String::new(),
     }
 }
@@ -671,6 +693,7 @@ mod tests {
         let lyr = rows_for("lyrics");
         assert!(lyr.contains(&S_TEXTSIZE) && lyr.contains(&S_PROVIDER) && lyr.contains(&S_OFFSET));
         assert!(lyr.contains(&S_ALIGN) && !lyr.contains(&S_CHARSET));
+        assert!(lyr.contains(&S_WORD));
         assert!(!lyr.contains(&S_SENS) && !lyr.contains(&S_BARS) && !lyr.contains(&S_CHARSET));
 
         assert_eq!(rows_for("text"), lyr);
@@ -768,16 +791,34 @@ mod tests {
         let mut changed = 0;
         cfg.provider = "auto".to_string();
         SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
-        assert_eq!(cfg.provider, "lrclib");
+        assert_eq!(cfg.provider, "lyrio");
+        for want in [
+            "betterlyrics",
+            "lrcred",
+            "unison",
+            "lrclib",
+            "kugou",
+            "paxsenix",
+            "auto",
+        ] {
+            SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
+            assert_eq!(cfg.provider, want);
+        }
+        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
+        assert_eq!(cfg.provider, "paxsenix");
         SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
-        assert_eq!(cfg.provider, "musixmatch");
-        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
-        assert_eq!(cfg.provider, "lrclib");
-        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
         assert_eq!(cfg.provider, "auto");
-        SettingsUi::adjust(&mut cfg, S_PROVIDER, -1, &mut changed);
-        assert_eq!(cfg.provider, "musixmatch");
-        SettingsUi::adjust(&mut cfg, S_PROVIDER, 1, &mut changed);
-        assert_eq!(cfg.provider, "auto");
+    }
+
+    #[test]
+    fn word_sync_toggles() {
+        let mut cfg = Config::default();
+        let mut changed = 0;
+        assert!(!cfg.prefer_word_synced);
+        SettingsUi::adjust(&mut cfg, S_WORD, 1, &mut changed);
+        assert!(cfg.prefer_word_synced);
+        SettingsUi::adjust(&mut cfg, S_WORD, 1, &mut changed);
+        assert!(!cfg.prefer_word_synced);
+        assert_ne!(changed & CH_LAYOUT, 0);
     }
 }

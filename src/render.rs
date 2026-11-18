@@ -65,6 +65,7 @@ pub struct Renderer {
     pub wave_fps: u32,
     text: Vec<char>,
     text_dim: Vec<bool>,
+    text_hi: Vec<u8>,
     focus: usize,
     pub text_left: bool,
     pub text_size: usize,
@@ -331,6 +332,7 @@ impl Renderer {
             wave_fps: 60,
             text: "SHARKVIS".chars().collect(),
             text_dim: Vec::new(),
+            text_hi: Vec::new(),
             focus: 0,
             text_left: false,
             text_size: 1,
@@ -404,32 +406,57 @@ impl Renderer {
             self.focus = v.len().saturating_sub(1);
             self.text = v;
             self.text_dim.clear();
+            self.text_hi.clear();
             self.clear();
         }
     }
 
+    #[cfg(test)]
     pub fn set_rich(&mut self, entries: &[(String, bool)]) {
+        let rows: Vec<(String, bool, usize, usize, usize)> = entries
+            .iter()
+            .map(|(s, cur)| (s.clone(), *cur, usize::MAX, usize::MAX, usize::MAX))
+            .collect();
+        self.set_rich_rows(&rows);
+    }
+
+    pub fn set_rich_rows(&mut self, entries: &[(String, bool, usize, usize, usize)]) {
         let mut text = Vec::new();
         let mut dim = Vec::new();
+        let mut hi = Vec::new();
         let mut focus = 0;
         let mut found = false;
-        for (i, (s, cur)) in entries.iter().enumerate() {
+        for (i, (s, cur, lit, hot_start, hot_end)) in entries.iter().enumerate() {
             if i > 0 {
                 text.push('\n');
                 dim.push(false);
+                hi.push(0);
             }
             if *cur && !found {
                 focus = text.len();
                 found = true;
             }
-            for c in s.chars().take(512) {
+            for (ci, c) in s.chars().take(512).enumerate() {
                 text.push(c);
                 dim.push(!cur);
+                let state = if !cur {
+                    1
+                } else if *lit == usize::MAX {
+                    0
+                } else if ci >= *hot_start && ci < *hot_end {
+                    2
+                } else if ci < *lit {
+                    0
+                } else {
+                    1
+                };
+                hi.push(state);
             }
         }
-        if self.text != text {
+        if self.text != text || self.text_dim != dim || self.text_hi != hi {
             self.text = text;
             self.text_dim = dim;
+            self.text_hi = hi;
             self.focus = focus;
             self.clear();
         }
@@ -1028,8 +1055,7 @@ impl Renderer {
         }
         self.row_colors();
 
-        let marker = 79u8;
-        let dim = self.text_dim.clone();
+        let hi = self.text_hi.clone();
         let mut paras: Vec<(usize, usize)> = Vec::new();
         let mut start = 0;
         for (i, c) in text.iter().enumerate() {
@@ -1039,10 +1065,10 @@ impl Renderer {
             }
         }
         paras.push((start, text.len()));
-        let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+        let mut spans: Vec<(usize, usize)> = Vec::new();
         for (ps, pe) in paras {
             if ps >= pe {
-                spans.push((ps, ps, false));
+                spans.push((ps, ps));
                 continue;
             }
             let mut k = ps;
@@ -1060,8 +1086,7 @@ impl Renderer {
                 if end == k {
                     end = k + 1;
                 }
-                let grey = (k..end).all(|i| dim.get(i).copied().unwrap_or(false));
-                spans.push((k, end, grey));
+                spans.push((k, end));
                 k = end;
             }
         }
@@ -1072,7 +1097,7 @@ impl Renderer {
         let top = rows.saturating_sub(spans.len()) / 2;
         let mut boxes: Vec<(usize, usize, usize)> = Vec::new();
         let mut enc = [0u8; 4];
-        for (li, &(s, e, grey)) in spans.iter().enumerate() {
+        for (li, &(s, e)) in spans.iter().enumerate() {
             let line = &text[s..e];
             let y = top + li;
             if y >= rows {
@@ -1087,12 +1112,14 @@ impl Renderer {
             boxes.push((x0, y, cells.min(x_end.saturating_sub(x0))));
             let mut changed = false;
             let mut cx = x0;
-            for c in line.iter() {
+            for (off, c) in line.iter().enumerate() {
+                let st = hi.get(s + off).copied().unwrap_or(0);
+                let m = 70 + st;
                 for _ in 0..Self::cell_width(*c) {
                     if cx >= x_end {
                         break;
                     }
-                    if self.prev[y * cols + cx] != marker {
+                    if self.prev[y * cols + cx] != m {
                         changed = true;
                         break;
                     }
@@ -1106,26 +1133,51 @@ impl Renderer {
                 continue;
             }
             seek_cell(y as u32, x0 as u32, out);
-            if grey {
+            let first = hi.get(s).copied().unwrap_or(0);
+            let mut dim_on = first == 1;
+            let mut under_on = first == 2;
+            if dim_on {
                 out.s(b"\x1b[2m");
+            }
+            if under_on {
+                out.s(b"\x1b[4m");
             }
             out.s(&self.row_col[y]);
             let mut cx = x0;
-            for c in line.iter() {
+            for (off, c) in line.iter().enumerate() {
                 if cx >= x_end {
                     break;
+                }
+                let st = hi.get(s + off).copied().unwrap_or(0);
+                let m = 70 + st;
+                if st == 1 && !dim_on {
+                    out.s(b"\x1b[2m");
+                    dim_on = true;
+                } else if st != 1 && dim_on {
+                    out.s(b"\x1b[22m");
+                    dim_on = false;
+                }
+                if st == 2 && !under_on {
+                    out.s(b"\x1b[4m");
+                    under_on = true;
+                } else if st != 2 && under_on {
+                    out.s(b"\x1b[24m");
+                    under_on = false;
                 }
                 for _ in 0..Self::cell_width(*c) {
                     if cx >= x_end {
                         break;
                     }
-                    self.prev[y * cols + cx] = marker;
+                    self.prev[y * cols + cx] = m;
                     cx += 1;
                 }
                 out.s(c.encode_utf8(&mut enc).as_bytes());
             }
-            if grey {
+            if dim_on {
                 out.s(b"\x1b[22m");
+            }
+            if under_on {
+                out.s(b"\x1b[24m");
             }
         }
         for y in 0..rows {
@@ -1180,7 +1232,7 @@ impl Renderer {
         let top = rows.saturating_sub(total_h) / 2;
         let x_end = (x_start + region_w).min(cols);
         let full = self.render_glyph(8).to_vec();
-        let dim = self.text_dim.clone();
+        let hi = self.text_hi.clone();
         let mut boxes: Vec<(usize, usize, usize, usize)> = Vec::new();
         let mut y0 = top;
         for line in lines.iter() {
@@ -1208,9 +1260,9 @@ impl Renderer {
                 let (g, w, _) = &gs[k];
                 let box_w = if k + 1 < line.len() { (w + 1) * s } else { w * s };
 
-                let dimmed = dim.get(ci).copied().unwrap_or(false);
-                let v = if dimmed { 0.35 } else { 1.0 };
-                let marker = 64 + (v * 15.0 + 0.5) as u8;
+                let st = hi.get(ci).copied().unwrap_or(0);
+                let v = if st == 1 { 0.35 } else { 1.0 };
+                let marker = 64 + (v * 15.0 + 0.5) as u8 + if st == 2 { 1 } else { 0 };
                 boxes.push((x0, y0, box_w, lh));
                 let mut changed = false;
                 for gr in 0..lh {
@@ -1243,8 +1295,10 @@ impl Renderer {
                             break;
                         }
                         seek_cell(y as u32, x0 as u32, out);
-                        if dimmed {
+                        if st == 1 {
                             out.s(b"\x1b[2m");
+                        } else if st == 2 {
+                            out.s(b"\x1b[4m");
                         }
                         out.s(&self.row_col[y]);
                         for px in 0..box_w {
@@ -1262,8 +1316,10 @@ impl Renderer {
                                 out.s(b" ");
                             }
                         }
-                        if dimmed {
+                        if st == 1 {
                             out.s(b"\x1b[22m");
+                        } else if st == 2 {
+                            out.s(b"\x1b[24m");
                         }
                     }
                 }
@@ -2155,6 +2211,21 @@ mod tests {
         assert!(text.contains(&format!("\x1b[2m{top}")), "context line is faint but keeps the row color");
         assert!(text.contains(&format!("\x1b[2m{bottom}")), "context line is faint but keeps the row color");
         assert!(text.contains(&current), "current line keeps full row color");
+    }
+
+    #[test]
+    fn small_text_marks_word_progress() {
+        let mut r = Renderer::new(24, 80, 2, 1, 8);
+        r.set_rich_rows(&[("one two three".to_string(), true, 4, 4, 7)]);
+        r.text_small = true;
+        let mut out = Vec::new();
+        r.draw_small_text(0, 80, &mut Out { buf: &mut out, cap: 1 << 20 });
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("one "));
+        assert!(text.contains("two"));
+        assert!(text.contains(" three"));
+        assert!(text.contains("\x1b[4m"), "current word is underlined, got {:?}", &text[..text.len().min(160)]);
+        assert!(text.contains("\x1b[2m"), "upcoming words are faint, got {:?}", &text[..text.len().min(160)]);
     }
 
     #[test]

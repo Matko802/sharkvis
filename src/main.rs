@@ -7,12 +7,14 @@ use std::time::{Duration, Instant};
 mod audio;
 mod config;
 mod cover;
+mod crypto;
 mod dsp;
 mod fft;
 mod lyrics;
 mod mpris;
 mod musixmatch;
 mod palette;
+mod providers;
 mod pulse;
 mod raw;
 mod render;
@@ -866,11 +868,21 @@ fn main() {
                     lyric.set_follow(!lyric.following(), track.position);
                     force_draw = true;
                 } else if is_k(key, &cp[..clen], b'p') || is_k(key, &cp[..clen], b'P') {
-                    cfg.provider = match cfg.provider.as_str() {
-                        "auto" => "lrclib".to_string(),
-                        "lrclib" => "musixmatch".to_string(),
-                        _ => "auto".to_string(),
-                    };
+                    const ORDER: [&str; 8] = [
+                        "auto",
+                        "lyrio",
+                        "betterlyrics",
+                        "lrcred",
+                        "unison",
+                        "lrclib",
+                        "kugou",
+                        "paxsenix",
+                    ];
+                    let cur = ORDER
+                        .iter()
+                        .position(|p| *p == cfg.provider)
+                        .unwrap_or(0);
+                    cfg.provider = ORDER[(cur + 1) % ORDER.len()].to_string();
                     lyric.poke();
                     cfg_dirty = true;
                     if !config_save(&cfg, &save_path) {
@@ -1137,6 +1149,9 @@ fn main() {
                     &FetchOpts {
                         local_folder: cfg.lyrics_folder.clone(),
                         provider: cfg.provider.clone(),
+                        prefer_word_synced: cfg.prefer_word_synced,
+                        lyrio_url: cfg.lyrio_url.clone(),
+                        lyrio_key: cfg.lyrio_key.clone(),
                     },
                 );
             }
@@ -1177,18 +1192,21 @@ fn main() {
             force_draw = true;
         }
         if rnd.mode == RenderMode::Lyrics {
-            let rows = if cfg.text_style == "normal" {
-                lyric.display_context(&track)
-            } else {
-                lyric.display_lines(&track)
-            };
-            let shown: String =
-                rows.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("\n");
+            let rows = lyric.display_rows(&track, cfg.text_style == "normal");
+            let shown: String = rows
+                .iter()
+                .map(|r| format!("{}|{}|{}", r.text, r.lit, r.hot_start))
+                .collect::<Vec<_>>()
+                .join("\n");
             if shown != last_lyric_shown {
                 last_lyric_shown = shown;
                 force_draw = true;
             }
-            rnd.set_rich(&rows);
+            let rich: Vec<(String, bool, usize, usize, usize)> = rows
+                .iter()
+                .map(|r| (r.text.clone(), r.current, r.lit, r.hot_start, r.hot_end))
+                .collect();
+            rnd.set_rich_rows(&rich);
         }
 
         let mut need_draw = force_draw || in_settings;

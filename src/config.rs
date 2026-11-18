@@ -48,6 +48,9 @@ pub struct Config {
     pub provider: String,
     pub lyric_offset_ms: i64,
     pub lyrics_folder: String,
+    pub prefer_word_synced: bool,
+    pub lyrio_url: String,
+    pub lyrio_key: String,
     pub mpris_players: String,
     pub chars: Vec<u8>,
 }
@@ -81,6 +84,9 @@ impl Default for Config {
             provider: "auto".to_string(),
             lyric_offset_ms: 0,
             lyrics_folder: String::new(),
+            prefer_word_synced: false,
+            lyrio_url: String::new(),
+            lyrio_key: String::new(),
             mpris_players: String::new(),
             chars: DEFAULT_CHARS.to_vec(),
         }
@@ -462,6 +468,15 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
         if let Some(s) = lyrics.get("folder").and_then(|v| v.as_str()) {
             cfg.lyrics_folder = s.to_string();
         }
+        if let Some(v) = lyrics.get("prefer_word_synced").and_then(|v| v.as_bool()) {
+            cfg.prefer_word_synced = v;
+        }
+        if let Some(s) = lyrics.get("lyrio_url").and_then(|v| v.as_str()) {
+            cfg.lyrio_url = s.to_string();
+        }
+        if let Some(s) = lyrics.get("lyrio_key").and_then(|v| v.as_str()) {
+            cfg.lyrio_key = s.to_string();
+        }
     }
     if let Some(mpris) = root.get("mpris") {
         if let Some(s) = mpris.get("players").and_then(|v| v.as_str()) {
@@ -502,7 +517,16 @@ pub fn config_load(cfg: &mut Config, path: &str) -> bool {
             }
         }
         if let Some(s) = vis.get("provider").and_then(|v| v.as_str()) {
-            if s == "auto" || s == "musixmatch" || s == "lrclib" {
+            if s == "auto"
+                || s == "musixmatch"
+                || s == "lyrio"
+                || s == "betterlyrics"
+                || s == "lrcred"
+                || s == "unison"
+                || s == "lrclib"
+                || s == "kugou"
+                || s == "paxsenix"
+            {
                 cfg.provider = s.to_string();
             }
         }
@@ -633,8 +657,20 @@ pub fn config_save(cfg: &Config, path: &str) -> bool {
     out.push_str("    },\n");
     out.push_str("    \"lyrics\": {\n");
     out.push_str(&format!(
-        "        \"folder\": {}\n",
+        "        \"folder\": {},\n",
         json_escape(&cfg.lyrics_folder)
+    ));
+    out.push_str(&format!(
+        "        \"prefer_word_synced\": {},\n",
+        cfg.prefer_word_synced
+    ));
+    out.push_str(&format!(
+        "        \"lyrio_url\": {},\n",
+        json_escape(&cfg.lyrio_url)
+    ));
+    out.push_str(&format!(
+        "        \"lyrio_key\": {}\n",
+        json_escape(&cfg.lyrio_key)
     ));
     out.push_str("    },\n");
     out.push_str("    \"mpris\": {\n");
@@ -698,7 +734,7 @@ mod tests {
                 "text_style": "small", "provider": "lrclib", "offset_ms": -250,
                 "chars": "ab"
             },
-            "lyrics": {"folder": "/tmp/x"},
+            "lyrics": {"folder": "/tmp/x", "prefer_word_synced": true, "lyrio_url": "https://x", "lyrio_key": "k"},
             "mpris": {"players": "a,b"}
         }"##;
         let path =
@@ -730,6 +766,9 @@ mod tests {
         assert_eq!(c.lyric_offset_ms, -250);
         assert_eq!(c.chars, b"ab");
         assert_eq!(c.lyrics_folder, "/tmp/x");
+        assert!(c.prefer_word_synced);
+        assert_eq!(c.lyrio_url, "https://x");
+        assert_eq!(c.lyrio_key, "k");
         assert_eq!(c.mpris_players, "a,b");
         let _ = std::fs::remove_file(&path);
     }
@@ -742,6 +781,9 @@ mod tests {
         c.colors = "jefetch".to_string();
         c.gradient_amt = 42;
         c.method = "auto".to_string();
+        c.prefer_word_synced = true;
+        c.lyrio_url = "https://x".to_string();
+        c.lyrio_key = "k".to_string();
         c.chars = "x\"y\\z".as_bytes().to_vec();
         let path =
             std::env::temp_dir().join(format!("sharkvis-rt-{}.jsonc", std::process::id()));
@@ -755,6 +797,9 @@ mod tests {
         assert_eq!(c2.colors, "jefetch");
         assert_eq!(c2.gradient_amt, 42);
         assert_eq!(c2.method, "auto");
+        assert!(c2.prefer_word_synced);
+        assert_eq!(c2.lyrio_url, "https://x");
+        assert_eq!(c2.lyrio_key, "k");
         assert_eq!(c2.chars, "x\"y\\z".as_bytes());
         let _ = std::fs::remove_file(&path);
     }
